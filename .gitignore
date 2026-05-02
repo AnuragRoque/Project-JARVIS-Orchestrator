@@ -1,0 +1,166 @@
+# ==============================================================================
+# Git Ignore for Jarvis v4 Desktop Utility & AI Assistant
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Environment Variables & Secrets
+# ------------------------------------------------------------------------------
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Exceptions for sample and template files
+!.env.example
+!.env.sample
+!.env_sample
+!.env.template
+
+# ------------------------------------------------------------------------------
+# Python Bytecode & Runtime Cache
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.so
+
+# ------------------------------------------------------------------------------
+# Virtual Environments
+# ------------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+bin/
+include/
+lib/
+lib64/
+share/
+
+# ------------------------------------------------------------------------------
+# Databases & Storage (SQLite, WAL files, FAISS vector indexes)
+# ------------------------------------------------------------------------------
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.faiss
+*.index
+commands_memory.db
+jarvis.db
+activity.db
+
+# ------------------------------------------------------------------------------
+# Logs, Audio Recordings & Temporary Data
+# ------------------------------------------------------------------------------
+*.log
+logs/
+*.log.*
+*.tmp
+*.temp
+temp/
+tmp/
+recordings/
+*.wav
+*.mp3
+*.pcm
+*.ogg
+*.flac
+
+# ------------------------------------------------------------------------------
+# User & Local Settings
+# ------------------------------------------------------------------------------
+user_settings.json
+config.json
+local_settings.py
+
+# ------------------------------------------------------------------------------
+# AI Models & Large Weight Files (Vosk, PyTorch, ONNX, HuggingFace)
+# ------------------------------------------------------------------------------
+vosk-model-*/
+models/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.gguf
+
+# ------------------------------------------------------------------------------
+# Build, Distribution & Packaging (PyInstaller, setuptools, wheels)
+# ------------------------------------------------------------------------------
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.manifest
+*.spec
+
+# ------------------------------------------------------------------------------
+# Testing, Coverage & Linters
+# ------------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+# ------------------------------------------------------------------------------
+# IDEs, Code Editors & Tooling
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+
+# ------------------------------------------------------------------------------
+# Operating System Artifacts (Windows / macOS / Linux)
+# ------------------------------------------------------------------------------
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+
+extension/

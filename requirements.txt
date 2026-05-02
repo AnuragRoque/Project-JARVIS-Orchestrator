@@ -1,0 +1,32 @@
+# ---- UI (single Qt binding for the whole app) ----
+PyQt6>=6.6.0
+
+# ---- LLM providers ----
+openai>=1.0.0
+ollama>=0.4.0
+
+# ---- Voice (STT capture + Windows SAPI TTS) ----
+sounddevice
+numpy
+requests
+pywin32
+
+# ---- Timeline engine (capture, DB, browser API) ----
+SQLAlchemy>=2.0
+pydantic>=2.0
+psutil>=5.9
+fastapi>=0.110
+uvicorn>=0.27
+
+# ---- Config ----
+python-dotenv>=1.0.0
+
+# ---- Reminders (Phase 4) ----
+dateparser
+
+# ---- Optional: semantic recall (enable in Settings) ----
+# sentence-transformers>=2.5
+# faiss-cpu>=1.7
+
+# ---- Tests ----
+pytest>=8.0.0
