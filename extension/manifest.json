@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Activity Recall Connector",
+  "version": "1.0.0",
+  "description": "Sends the pages you actively view to your local Windows Activity Recall app. Data stays on your machine.",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8123/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Activity Recall",
+    "default_popup": "options.html"
+  },
+  "icons": {}
+}
