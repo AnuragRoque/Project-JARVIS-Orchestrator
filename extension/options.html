@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Activity Recall — Setup</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #16181d; color: #e6e8ee;
+           margin: 0; padding: 20px; width: 340px; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    p  { color: #8b93a3; font-size: 12px; line-height: 1.5; }
+    label { display: block; font-size: 12px; margin: 14px 0 4px; color: #aab0bd; }
+    input { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 8px;
+            border: 1px solid #2b303b; background: #1c1f26; color: #e6e8ee; font-size: 13px; }
+    button { margin-top: 14px; width: 100%; padding: 10px; border: none; border-radius: 8px;
+             background: #2b62ff; color: white; font-size: 13px; cursor: pointer; }
+    button:hover { background: #3d70ff; }
+    .status { margin-top: 12px; font-size: 12px; }
+    .ok { color: #22c55e; } .err { color: #f87171; }
+    code { background: #23272f; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>⏱ Activity Recall</h1>
+  <p>Paste the pairing token from the desktop app
+     (Settings → Browser). The token file is at
+     <code>%LOCALAPPDATA%\WindowsActivityRecall\api_token.txt</code>.</p>
+
+  <label for="token">Pairing token</label>
+  <input id="token" type="text" placeholder="paste token here" autocomplete="off" />
+  <button id="save">Save &amp; Test Connection</button>
+  <div class="status" id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
