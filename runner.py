@@ -15,8 +15,10 @@ from PyQt6.QtWidgets import QApplication
 from jarvis.app.config.settings import get_settings
 from jarvis.app.data.db import get_database
 from jarvis.app.logsetup import get_logger, setup_logging
+from jarvis.app.safety import guard, install_excepthook, set_error_notifier
 
 _SINGLETON_KEY = "jarvis-singleton-v1"
+_WATCHDOG_MS = 30000  # how often to check background services are alive
 log = get_logger("runner")
 
 
@@ -35,12 +37,15 @@ class Runner:
         self.tool_router = None
         self.coordinator = None
         self.broker = None
+        self.reminders_module = None
+        self.reminder_popup = None
         self._modules = []
         self._server: QLocalServer | None = None
 
     # --------------------------------------------------------- entry point
     def run(self) -> int:
         setup_logging()
+        install_excepthook()      # a bug in one feature must not kill the app
         log.info("Starting JARVIS")
 
         self.app = QApplication(sys.argv)
@@ -53,19 +58,58 @@ class Runner:
         self._become_primary()
 
         self.settings = get_settings()
-        get_database()  # create jarvis.db (WAL) on first boot
+        try:
+            get_database()  # create jarvis.db (WAL) on first boot
+        except Exception:
+            log.exception("Kernel DB init failed (continuing)")
 
-        self._start_services()
-        self._build_ui()
+        # Each subsystem boots independently; a failure disables that feature only.
+        try:
+            self._start_services()
+        except Exception:
+            log.exception("Service boot failed (continuing)")
+        try:
+            self._build_ui()
+        except Exception:
+            log.exception("UI boot failed")
+            # Without a floating window there's nothing to show; surface via tray if any.
 
-        if not self.settings.get("start_minimized"):
-            self.floating.show_and_raise()
-        if self.tray:
-            self.tray.message("JARVIS", "Running in the tray. Click to open.")
+        self._start_watchdog()
+
+        try:
+            if self.floating and not self.settings.get("start_minimized"):
+                self.floating.show_and_raise()
+            if self.tray:
+                self.tray.message("JARVIS", "Running in the tray. Click to open.")
+        except Exception:
+            log.exception("Initial surface failed (continuing)")
 
         code = self.app.exec()
         self._shutdown()
         return code
+
+    # ------------------------------------------------------------ watchdog
+    def _start_watchdog(self) -> None:
+        """Periodically ensure the background services are still alive; restart
+        any that died. Never restarts by closing anything — only revives."""
+        self._watchdog = QTimer()
+        self._watchdog.setInterval(_WATCHDOG_MS)
+        self._watchdog.timeout.connect(guard(self._check_services, where="watchdog"))
+        self._watchdog.start()
+
+    def _check_services(self) -> None:
+        for name, svc in (("activity tracker", self.tracker),
+                          ("file recall", self.file_service),
+                          ("browser API", self.api_server)):
+            if svc is None:
+                continue
+            thread = getattr(svc, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                log.warning("Service '%s' stopped — restarting", name)
+                try:
+                    svc.start()  # start() is idempotent / creates a fresh thread
+                except Exception:
+                    log.exception("Restart of '%s' failed (feature stays down)", name)
 
     # ---------------------------------------------------- single instance
     def _already_running(self) -> bool:
@@ -137,8 +181,19 @@ class Runner:
         self.controller = VoiceController()
         # One shared PowerShell engine: the orchestrator's commands run here and
         # also surface in Tab 3's live terminal.
-        self.pw_engine = PowerShellEngine()
+        try:
+            self.pw_engine = PowerShellEngine()
+        except Exception:
+            log.exception("PowerShell engine failed to start (terminal disabled)")
+            self.pw_engine = None
         self._setup_orchestrator()
+
+        # Reminder toasts (subscribes to the reminder.due bus event).
+        try:
+            from jarvis.ui.reminder_popup import ReminderPopupManager
+            self.reminder_popup = ReminderPopupManager(snooze_cb=self._snooze_reminder)
+        except Exception:
+            log.exception("Reminder popups failed to init (continuing)")
 
         self.floating = FloatingWindow(self.controller)
         self.floating.request_maximise.connect(self._open_main)
@@ -148,6 +203,15 @@ class Runner:
             on_quit=self._quit,
             on_toggle_pause=self._toggle_pause if self.tracker else None,
         )
+        # Surface swallowed background errors as a quiet tray nudge (throttled).
+        set_error_notifier(lambda msg: self.tray and self.tray.message("JARVIS", msg))
+
+    def _snooze_reminder(self, text: str) -> None:
+        if self.reminders_module is not None:
+            try:
+                self.reminders_module.set_reminder(text, "in 5 minutes")
+            except Exception:
+                log.exception("snooze reminder failed")
 
     def _setup_orchestrator(self) -> None:
         """Register module tools and point the controller at the orchestrator."""
@@ -159,6 +223,14 @@ class Runner:
         from jarvis.app.tool_router import ToolRouter
         from jarvis.modules.terminal.core.models import ExecutionMode
         from jarvis.modules.terminal.module import TerminalModule
+        from jarvis.modules.reminders.module import RemindersModule
+        from jarvis.modules.power.module import PowerModule
+        from jarvis.modules.browser.module import BrowserModule
+        from jarvis.modules.documents.module import DocumentsModule
+        from jarvis.modules.typing.module import TypingModule
+        from jarvis.modules.media.module import MediaModule
+        from jarvis.modules.pyscript.module import PyScriptModule
+        from jarvis.modules.learning.module import LearningModule
         from jarvis.modules.terminal.providers.openai_provider import OpenAIProvider
         from jarvis.modules.timeline.module import TimelineModule
         from jarvis.ui.confirm_broker import ConfirmBroker
@@ -171,37 +243,59 @@ class Runner:
                               settings=ModuleSettings(mod_id), log=get_logger(mod_id),
                               speak=self.controller.speak)
 
-        term = TerminalModule()
-        term.attach_engine(self.pw_engine)     # share the GUI-thread engine
-        term.start(ctx_for("terminal"))
-        tl = TimelineModule()
-        tl.start(ctx_for("timeline"))
-        self._modules = [term, tl]
-        for m in self._modules:
-            router.register(m.tools())
+        def safe_start(module, mod_id: str, setup=None):
+            """Start a module defensively — a broken one is skipped, not fatal."""
+            try:
+                if setup is not None:
+                    setup(module)
+                module.start(ctx_for(mod_id))
+                router.register(module.tools())
+                self._modules.append(module)
+                return module
+            except Exception:
+                log.exception("Module '%s' failed to start; skipping", mod_id)
+                return None
+
+        self._modules = []
+        safe_start(TerminalModule(), "terminal",
+                   setup=lambda m: m.attach_engine(self.pw_engine))
+        safe_start(TimelineModule(), "timeline")
+        self.reminders_module = safe_start(RemindersModule(), "reminders")
+        safe_start(PowerModule(), "power")
+        safe_start(BrowserModule(), "browser")
+        safe_start(DocumentsModule(), "documents")
+        safe_start(TypingModule(), "typing")
+        safe_start(MediaModule(), "media")
+        safe_start(PyScriptModule(), "pyscript")
+        learning = safe_start(LearningModule(), "learning")
+        if learning is not None and getattr(learning, "learner", None) is not None:
+            self.controller.set_learner(learning.learner)  # remember-what-worked loop
         self.tool_router = router
 
-        cfg = self.controller.cfg
-        model = cfg.get("openai_model")
-        provider = OpenAIProvider(api_key=cfg.openai_key, model=model)
-
-        # Permission mode from global settings; risky actions are confirmed via a
-        # spoken + clickable prompt (voice yes/no or button).
+        # The brain + permission gate. If any of this fails, the app still runs —
+        # the controller simply falls back to plain chat.
         try:
-            mode = ExecutionMode(str(get_settings().get("permission_mode", "partial")).lower())
-        except ValueError:
-            mode = ExecutionMode.PARTIAL
-        self.broker = ConfirmBroker(self.controller)
-        self.coordinator = PermissionCoordinator(mode=mode, confirm=self.broker.confirm)
-
-        self.controller.configure_orchestrator(provider, model, router,
-                                               self.coordinator)
+            cfg = self.controller.cfg
+            model = cfg.get("openai_model")
+            provider = OpenAIProvider(api_key=cfg.openai_key, model=model)
+            try:
+                mode = ExecutionMode(
+                    str(get_settings().get("permission_mode", "partial")).lower())
+            except ValueError:
+                mode = ExecutionMode.PARTIAL
+            self.broker = ConfirmBroker(self.controller)
+            self.coordinator = PermissionCoordinator(mode=mode, confirm=self.broker.confirm)
+            self.controller.configure_orchestrator(provider, model, router,
+                                                   self.coordinator)
+        except Exception:
+            log.exception("Orchestrator setup failed; running in plain-chat mode")
 
     def _ensure_main(self):
         if self.main_window is None:
             from jarvis.ui.main_window import MainWindow
             self.main_window = MainWindow(
-                self.controller, tracker=self.tracker, engine=self.pw_engine)
+                self.controller, tracker=self.tracker, engine=self.pw_engine,
+                modules=self._modules)
         return self.main_window
 
     def _open_main(self) -> None:
