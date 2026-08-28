@@ -65,6 +65,21 @@ QScrollArea, #Chat {{ background: transparent; border: none; }}
 
 #Status {{ color: #8a93a3; font-size: 11px; }}
 
+/* Collapsible tool/command step (rendered under the reply, left-aligned) */
+#StepHeader {{
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px; padding: 5px 11px; color: #93b4e6;
+    font-size: 11px; font-weight: 600; text-align: left;
+}}
+#StepHeader:hover {{ background: rgba(47,155,255,0.16); color: #eaf1fb; }}
+#StepDetail {{
+    background: rgba(0,0,0,0.30);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 9px; padding: 8px 11px; color: #c7d0df;
+    font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 11px;
+}}
+
 #Mic {{
     border-radius: 34px;
     min-width: 68px; max-width: 68px; min-height: 68px; max-height: 68px;
