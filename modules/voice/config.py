@@ -46,6 +46,10 @@ DEFAULT_SETTINGS = {
     "require_wake_word": False,  # if True, ignore utterances without the wake word
     "silence_ms": 900,           # trailing silence that auto-ends an utterance
     "vad_threshold": 450,        # RMS level above which audio counts as speech
+    # ---- Barge-in (interrupt TTS by speaking) ----
+    "barge_in": True,            # let the user cut in while JARVIS is speaking
+    "barge_threshold": 1100,     # higher VAD gate while speaking (curbs echo self-trigger)
+    "max_spoken_chars": 360,     # cap spoken reply length (screen shows the full text)
 }
 
 

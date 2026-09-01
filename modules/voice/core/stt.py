@@ -81,6 +81,11 @@ class LiveListener(QThread):
     def resume(self) -> None:
         self._paused = False
 
+    def set_threshold(self, threshold: int) -> None:
+        """Adjust the VAD energy gate live (raised while JARVIS speaks so its own
+        voice bleeding into the mic is less likely to false-trigger barge-in)."""
+        self.threshold = max(1, int(threshold))
+
     def stop(self) -> None:
         self._running = False
 
@@ -171,13 +176,27 @@ def transcribe(wav_bytes: bytes, api_key: str, language: str, model: str) -> str
     else:
         data["language_code"] = "unknown"
 
-    resp = requests.post(
-        SARVAM_STT_URL,
-        headers={"api-subscription-key": api_key},
-        files=files,
-        data=data,
-        timeout=60,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Sarvam STT error {resp.status_code}: {resp.text[:200]}")
-    return (resp.json().get("transcript") or "").strip()
+    # Retry transient failures (network hiccups / 5xx); don't retry 4xx (bad key etc.).
+    attempts, last_err = 2, None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.post(
+                SARVAM_STT_URL,
+                headers={"api-subscription-key": api_key},
+                files=files,
+                data=data,
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            last_err = RuntimeError(f"Network error reaching Sarvam: {exc}")
+        else:
+            if resp.status_code == 200:
+                return (resp.json().get("transcript") or "").strip()
+            if resp.status_code < 500:  # client error — won't change on retry
+                raise RuntimeError(
+                    f"Sarvam STT error {resp.status_code}: {resp.text[:200]}")
+            last_err = RuntimeError(f"Sarvam STT error {resp.status_code}")
+        if attempt < attempts:
+            import time
+            time.sleep(0.5 * attempt)
+    raise last_err
