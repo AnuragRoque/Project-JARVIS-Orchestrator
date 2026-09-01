@@ -8,7 +8,8 @@ from jarvis.modules.timeline.recall.ui.theme import stylesheet
 
 
 class TimelineTab(QWidget):
-    def __init__(self, tracker=None, parent: QWidget | None = None) -> None:
+    def __init__(self, tracker=None, on_send_to_jarvis=None,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setStyleSheet(stylesheet(dark=True))
         lay = QVBoxLayout(self)
@@ -16,4 +17,6 @@ class TimelineTab(QWidget):
         self.window = RecallWindow(tracker=tracker)
         # Embedded: don't let it intercept the app's close into hide-to-tray.
         self.window.close_to_tray = False
+        if on_send_to_jarvis is not None:
+            self.window.send_to_jarvis = on_send_to_jarvis
         lay.addWidget(self.window)
