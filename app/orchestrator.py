@@ -11,6 +11,7 @@ loop can call them synchronously.
 from __future__ import annotations
 
 import json
+import time
 from typing import Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -19,6 +20,13 @@ from .logsetup import get_logger
 from .tool_router import ToolRouter
 
 log = get_logger("orchestrator")
+
+_RETRY_ATTEMPTS = 3          # transient provider/network errors are retried
+_RETRY_BACKOFF = 0.7         # seconds, multiplied by the attempt number
+# Substrings that mark a permanent error not worth retrying (auth/quota/bad model).
+_NO_RETRY = ("invalid api key", "incorrect api key", "authentication",
+             "no api key", "missing", "model_not_found", "does not exist",
+             "insufficient_quota", "unsupported")
 
 # gate(name, args, risk) -> (allowed: bool, reason: str)
 PermissionGate = Callable[[str, dict, str], tuple[bool, str]]
@@ -58,7 +66,7 @@ class Orchestrator(QThread):
         specs = self.router.specs() or None
         try:
             for _step in range(self.max_steps):
-                message = self.provider.chat(self.model, self.messages, tools=specs)
+                message = self._chat(specs)
                 calls = self._extract_calls(message)
 
                 if not calls:
@@ -73,6 +81,27 @@ class Orchestrator(QThread):
         except Exception as exc:  # provider/network errors etc.
             log.exception("Orchestrator failed")
             self.failed.emit(str(exc))
+
+    def _chat(self, specs):
+        """Call the provider with a small retry for transient failures.
+
+        Permanent errors (bad key/model/quota) are not retried. If every attempt
+        fails, the exception propagates and ``run`` reports it — the app is fine.
+        """
+        last = None
+        for attempt in range(1, _RETRY_ATTEMPTS + 1):
+            try:
+                return self.provider.chat(self.model, self.messages, tools=specs)
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                if any(s in str(exc).lower() for s in _NO_RETRY):
+                    raise
+                log.warning("provider.chat attempt %d/%d failed: %s",
+                            attempt, _RETRY_ATTEMPTS, exc)
+                if attempt < _RETRY_ATTEMPTS:
+                    self.status.emit(f"Reconnecting… (attempt {attempt + 1})")
+                    time.sleep(_RETRY_BACKOFF * attempt)
+        raise last
 
     def _run_call(self, call_id: str, name: str, args: dict) -> None:
         tool = self.router.get(name)
