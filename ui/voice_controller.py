@@ -10,9 +10,12 @@ the signal surface stays the same, so the views don't change.
 """
 from __future__ import annotations
 
+import json
+
 from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
 
 from jarvis.app.data.db import get_database
+from jarvis.app.eventlog import log_event
 from jarvis.app.logsetup import get_logger
 from jarvis.app.orchestrator import Orchestrator
 from jarvis.app.prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
@@ -24,6 +27,33 @@ log = get_logger("voice")
 
 MAX_HISTORY = 12
 _SENTENCE_END = ".!?\n"
+_TOOL_FAIL_PREFIXES = ("[DECLINED]", "[error]", "[BLOCKED]", "[LOOP_DETECTED]")
+
+
+def _executed_tools(messages: list[dict]) -> list[dict]:
+    """From the orchestrator's message trace, return the tool calls that SUCCEEDED
+    as [{name, args}] — the reusable 'approach' to remember for this intent."""
+    ok_by_id: dict[str, bool] = {}
+    for m in messages:
+        if m.get("role") == "tool":
+            content = str(m.get("content", ""))
+            ok_by_id[m.get("tool_call_id")] = not content.startswith(_TOOL_FAIL_PREFIXES)
+    good: list[dict] = []
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for call in m["tool_calls"]:
+                fn = call.get("function", {}) or {}
+                name = fn.get("name")
+                if not name or not ok_by_id.get(call.get("id"), True):
+                    continue
+                args = fn.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                good.append({"name": name, "args": args if isinstance(args, dict) else {}})
+    return good
 
 
 class VoiceController(QObject):
@@ -40,6 +70,7 @@ class VoiceController(QObject):
     tool_started = pyqtSignal(str, str)    # tool name, args summary
     tool_finished = pyqtSignal(str, str)   # tool name, result preview
     permission_mode_changed = pyqtSignal(str)  # auto | partial | manual
+    _speech_done = pyqtSignal()            # internal: TTS queue drained (marshals to GUI)
 
     def __init__(self) -> None:
         super().__init__()
@@ -49,11 +80,14 @@ class VoiceController(QObject):
         self.listener: stt.LiveListener | None = None
         self.speech = tts.SpeechQueue()
         self.speech.configure(self.cfg.get("tts_voice"), self.cfg.get("tts_rate"))
+        self.speech.on_finished = self._speech_done.emit  # fired from TTS thread
+        self._speech_done.connect(self._on_speech_done)
         self.history: list[dict] = []
 
         self._live = False
         self._busy = False
         self._speak = False
+        self._speaking = False   # TTS is currently playing (barge-in target)
         self._stream_text = ""
         self._spoken_upto = 0
 
@@ -67,6 +101,7 @@ class VoiceController(QObject):
         self._gate = None
         self._system_prompt = DEFAULT_SYSTEM_PROMPT
         self._orch: Orchestrator | None = None
+        self._learner = None  # skill memory (remember-what-worked); set by the runner
 
     def configure_orchestrator(self, provider, model: str, router,
                                coordinator=None, system_prompt: str | None = None) -> None:
@@ -133,14 +168,28 @@ class VoiceController(QObject):
         self._ask(text)
 
     def _ask(self, prompt: str) -> None:
+        # Learn from the reaction to the PREVIOUS turn ("try again" / "yes, good").
+        if self._learner is not None:
+            try:
+                self._learner.apply_feedback(prompt)
+            except Exception:
+                log.debug("apply_feedback failed", exc_info=True)
+        # Log the user's turn first so the Logs tab reads user → commands → reply
+        # in order (commands are logged by the permission gate in between).
+        log_event("chat", (prompt or "")[:200], module="voice",
+                  detail=prompt or "", decision="said")
         if self._use_orchestrator:
             self._ask_orchestrator(prompt)
         else:
             self._ask_stream(prompt)
 
+    def set_learner(self, learner) -> None:
+        self._learner = learner
+
     def _prepare_reply(self) -> None:
         self._set_status("Thinking…")
-        self.speech.clear()
+        self.speech.stop()          # cut any in-progress speech for the new turn
+        self._speaking = False
         self.speech.configure(self.cfg.get("tts_voice"), self.cfg.get("tts_rate"))
         self._speak = bool(self.cfg.get("speak_replies"))
         self._stream_text = ""
@@ -175,13 +224,32 @@ class VoiceController(QObject):
     def _build_messages(self, prompt: str) -> list[dict]:
         msgs = [{"role": "system", "content": self._system_prompt}]
         msgs.extend(self.history)
+        # Inject learned memory: the approach that worked before / one to avoid now.
+        if self._learner is not None:
+            try:
+                hint = self._learner.hint_for(prompt)
+            except Exception:
+                hint = None
+            if hint:
+                msgs.append({"role": "system", "content": hint})
         msgs.append({"role": "user", "content": prompt})
         return msgs
 
     def _on_orch_final(self, prompt: str, reply: str) -> None:
         self.reply_started.emit()
         self.reply_finished.emit(reply or "…")
-        self._finalize_reply(prompt, reply)
+        self._record_learning(prompt)
+        self._finalize_reply(prompt, reply, streamed=False)
+
+    def _record_learning(self, prompt: str) -> None:
+        """Remember the tool approach that succeeded this turn (provisional)."""
+        if self._learner is None or self._orch is None:
+            return
+        try:
+            tools = _executed_tools(self._orch.messages)
+            self._learner.note_turn(prompt, tools, had_error=False)
+        except Exception:
+            log.debug("note_turn failed", exc_info=True)
 
     def _on_chunk(self, delta: str) -> None:
         self._stream_text += delta
@@ -207,9 +275,9 @@ class VoiceController(QObject):
 
     def _on_reply(self, prompt: str, reply: str) -> None:
         self.reply_finished.emit(reply or "…")
-        self._finalize_reply(prompt, reply)
+        self._finalize_reply(prompt, reply, streamed=True)
 
-    def _finalize_reply(self, prompt: str, reply: str) -> None:
+    def _finalize_reply(self, prompt: str, reply: str, streamed: bool = False) -> None:
         self.history.append({"role": "user", "content": prompt})
         self.history.append({"role": "assistant", "content": reply})
         self.history[:] = self.history[-MAX_HISTORY:]
@@ -217,20 +285,67 @@ class VoiceController(QObject):
 
         if self._live:
             if self._speak and reply:
-                task = Task(tts.speak, reply, self.cfg.get("tts_voice"),
-                            self.cfg.get("tts_rate"))
-                task.signals.finished.connect(self._resume_live)
-                self._set_status("Speaking…")
-                self.pool.start(task)
+                self._speak_live(self._speakable(reply))
             else:
                 self._resume_live()
             return
 
-        if self._speak:
-            self._stream_text = reply
-            self._flush_spoken_sentences(final=True)
+        if self._speak and reply:
+            if streamed:
+                # Sentences were already spoken as they streamed; speak the tail.
+                self._stream_text = reply
+                self._flush_spoken_sentences(final=True)
+            else:
+                self.speech.say(self._speakable(reply))
         self._set_busy(False)
         self._set_status("Ready")
+
+    # -------------------------------------------------- barge-in speaking
+    def _speak_live(self, text: str) -> None:
+        """Speak a reply in live mode, staying interruptible (barge-in)."""
+        self._speaking = True
+        self._set_busy(False)  # thinking done → allow a barge-in utterance through
+        self.speech.configure(self.cfg.get("tts_voice"), self.cfg.get("tts_rate"))
+        barge = bool(self.cfg.get("barge_in"))
+        if self.listener is not None:
+            if barge:
+                self.listener.set_threshold(int(self.cfg.get("barge_threshold")))
+                self.listener.resume()   # stay active to catch an interruption
+            else:
+                self.listener.pause()
+        self._set_status("Speaking…  (say something to interrupt)"
+                         if barge else "Speaking…")
+        self.speech.say(text)
+
+    def _on_speech_started(self) -> None:
+        """Listener detected voice. While JARVIS is speaking, that's a barge-in."""
+        if self._speaking and self.cfg.get("barge_in"):
+            self.speech.stop()          # cut JARVIS off
+            self._speaking = False
+            self._set_status("Listening…")   # the utterance will be processed next
+        else:
+            self._set_status("Hearing you…")
+
+    def _on_speech_done(self) -> None:
+        """TTS queue drained normally (not interrupted) → back to listening."""
+        if not self._speaking:
+            return
+        self._speaking = False
+        if self.listener is not None:
+            self.listener.set_threshold(int(self.cfg.get("vad_threshold")))
+        self._resume_live()
+
+    def _speakable(self, text: str) -> str:
+        """Trim a long reply for speaking (the full text stays on screen)."""
+        text = (text or "").strip()
+        cap = int(self.cfg.get("max_spoken_chars") or 0)
+        if cap <= 0 or len(text) <= cap:
+            return text
+        cut = text[:cap]
+        best = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("\n"))
+        if best >= cap * 0.5:
+            return cut[:best + 1].strip()
+        return cut.rstrip() + "…"
 
     @staticmethod
     def _persist(prompt: str, reply: str) -> None:
@@ -253,11 +368,15 @@ class VoiceController(QObject):
                     (now, "assistant", reply))
         except Exception:
             log.debug("conversation persist skipped", exc_info=True)
+        # Also surface the reply in the Logs tab (the user's turn was logged in _ask).
+        log_event("reply", (reply or "")[:200], module="voice",
+                  detail=reply or "", decision="answered")
 
     def _on_error(self, message: str) -> None:
         self._set_busy(False)
+        self._speaking = False
         self.recording_changed.emit(False)
-        self.speech.clear()
+        self.speech.stop()
         self.error_occurred.emit(message)
         if self._live:
             self._resume_live()
@@ -329,25 +448,32 @@ class VoiceController(QObject):
             self._set_status(f"Mic error: {exc}")
             return
         self.listener.utterance.connect(self._on_live_utterance)
-        self.listener.speech_started.connect(lambda: self._set_status("Hearing you…"))
+        self.listener.speech_started.connect(self._on_speech_started)
         self.listener.start()
         self._set_status("Live — listening… tap to stop")
 
     def _stop_live(self) -> None:
         self._live = False
+        self._speaking = False
         if self.listener is not None:
             self.listener.stop()
             self.listener.wait(1500)
             self.listener = None
-        self.speech.clear()
+        self.speech.stop()
         self.listening_changed.emit(False)
         self._set_busy(False)
         self._set_status("Ready")
 
     def _on_live_utterance(self, wav: bytes) -> None:
-        if self._busy or not self._live or not wav:
+        if not self._live or not wav:
             return
+        if self._busy and not self._speaking:
+            return  # mid-thought: can't overlap a request
+        if self._speaking:              # completed a barge-in — stop JARVIS first
+            self.speech.stop()
+            self._speaking = False
         if self.listener is not None:
+            self.listener.set_threshold(int(self.cfg.get("vad_threshold")))
             self.listener.pause()
         self._set_busy(True)
         self._set_status("Transcribing…")
@@ -362,15 +488,41 @@ class VoiceController(QObject):
         self.user_said.emit(text)
         self._ask(text)
 
+    def _wake_config(self) -> tuple[list[str], bool]:
+        """Wake phrases + require flag, from global settings (multiple supported),
+        falling back to the voice module's single wake_word."""
+        words: list[str] = []
+        require = bool(self.cfg.get("require_wake_word"))
+        try:
+            from jarvis.app.config.settings import get_settings
+            s = get_settings()
+            raw = s.get("wake_words") or []
+            if isinstance(raw, str):
+                raw = [raw]
+            words = [w.strip().lower() for w in raw if str(w).strip()]
+            require = bool(s.get("require_wake_word", require))
+        except Exception:
+            log.debug("global wake config unavailable", exc_info=True)
+        if not words:
+            single = (self.cfg.get("wake_word") or "").strip().lower()
+            words = [single] if single else []
+        return words, require
+
     def _apply_wake_word(self, text: str) -> str:
-        wake = (self.cfg.get("wake_word") or "").strip().lower()
         if not text:
             return ""
+        words, require = self._wake_config()
+        if not words:
+            return text  # no wake configured → everything counts
         low = text.lower()
-        if self.cfg.get("require_wake_word") and wake and wake not in low:
+        present = next((w for w in words if w in low), None)
+        if require and present is None:
             return ""
-        if wake and low.startswith(wake):
-            text = text[len(wake):].lstrip(" ,.:!?-").strip() or text
+        # Strip a leading wake phrase so "jarvis open chrome" → "open chrome".
+        for w in words:
+            if low.startswith(w):
+                stripped = text[len(w):].lstrip(" ,.:!?-").strip()
+                return stripped or text
         return text
 
     def _resume_live(self) -> None:
@@ -379,6 +531,7 @@ class VoiceController(QObject):
             return
         self._set_busy(False)
         if self.listener is not None:
+            self.listener.set_threshold(int(self.cfg.get("vad_threshold")))
             self.listener.resume()
         self._set_status("Live — listening… tap to stop")
 

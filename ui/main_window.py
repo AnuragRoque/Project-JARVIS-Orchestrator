@@ -9,17 +9,23 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QMainWindow, QTabWidget
 
+from jarvis.app.logsetup import get_logger
 from jarvis.ui.styles import APP_STYLE
+from jarvis.ui.tabs.dashboard_tab import DashboardTab
+from jarvis.ui.tabs.logs_tab import LogsTab
 from jarvis.ui.tabs.placeholder import Placeholder
+from jarvis.ui.tabs.settings_tab import SettingsTab
 from jarvis.ui.tabs.terminal_tab import TerminalTab
 from jarvis.ui.tabs.timeline_tab import TimelineTab
 from jarvis.ui.tabs.voice_chat_tab import VoiceChatTab
+
+log = get_logger("main_window")
 
 
 class MainWindow(QMainWindow):
     close_to_tray = True
 
-    def __init__(self, controller, tracker=None, engine=None) -> None:
+    def __init__(self, controller, tracker=None, engine=None, modules=None) -> None:
         super().__init__()
         self.setWindowTitle("JARVIS")
         self.resize(1180, 760)
@@ -28,41 +34,46 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.setMovable(False)
         tabs.setDocumentMode(True)
-
-        self.voice_tab = VoiceChatTab(controller)
-        self.timeline_tab = TimelineTab(tracker=tracker)
-        self.terminal_tab = TerminalTab(engine=engine)
-
-        logs_tab = Placeholder(
-            "Detailed Logs",
-            "A searchable record of every command and tool JARVIS runs — with "
-            "arguments, results, and the permission decision for each. Arrives with "
-            "the structured event log.",
-            badge="PHASE 6",
-        )
-        settings_tab = Placeholder(
-            "Settings",
-            "Global preferences plus a section per module (voice, terminal, "
-            "timeline, …), split module-wise. For now, each module keeps its own "
-            "settings; the Activity Timeline tab has its own Settings section.",
-            badge="PHASE 7",
-        )
-        dashboard_tab = Placeholder(
-            "Dashboard",
-            "An at-a-glance view: usage stats, active reminders, power state, and "
-            "recent actions.",
-            badge="COMING SOON",
-        )
-
-        tabs.addTab(self.voice_tab, "Voice Chat")
-        tabs.addTab(self.timeline_tab, "Activity Timeline")
-        tabs.addTab(self.terminal_tab, "Terminal")
-        tabs.addTab(logs_tab, "Logs")
-        tabs.addTab(settings_tab, "Settings")
-        tabs.addTab(dashboard_tab, "Dashboard")
-
         self.tabs = tabs
+
+        # Each tab is built defensively: if one raises, it becomes an error page
+        # instead of taking down the whole window.
+        self.voice_tab = self._safe_tab(
+            "Voice Chat", lambda: VoiceChatTab(controller))
+        self.timeline_tab = self._safe_tab(
+            "Activity Timeline",
+            lambda: TimelineTab(tracker=tracker, on_send_to_jarvis=self._send_to_jarvis))
+        self.terminal_tab = self._safe_tab(
+            "Terminal", lambda: TerminalTab(engine=engine))
+        self._safe_tab("Logs", LogsTab)
+        self._safe_tab("Settings", lambda: SettingsTab(controller, modules=modules))
+        self._safe_tab("Dashboard", DashboardTab)
+
         self.setCentralWidget(tabs)
+
+    def _safe_tab(self, title: str, factory):
+        try:
+            widget = factory()
+        except Exception:
+            log.exception("Tab '%s' failed to build; showing an error page", title)
+            widget = Placeholder(
+                title, "This section failed to load, but the rest of JARVIS is "
+                "running normally. See the logs for details.", badge="UNAVAILABLE")
+        self.tabs.addTab(widget, title)
+        return widget
+
+    def _send_to_jarvis(self, result: dict) -> None:
+        """Timeline → hub: switch to Voice Chat and prefill a request about the item."""
+        title = (result.get("title") or result.get("path")
+                 or result.get("url") or "").strip()
+        if not title:
+            return
+        kind = result.get("kind")
+        verb = "Open my file" if kind == "file" else "Reopen" if kind == "browser" else "Open"
+        if not hasattr(self.voice_tab, "view"):
+            return  # Voice Chat tab unavailable; nothing to prefill
+        self.tabs.setCurrentWidget(self.voice_tab)
+        self.voice_tab.view.prefill(f'{verb} "{title[:120]}"')
 
     def shutdown(self) -> None:
         try:
