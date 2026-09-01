@@ -48,13 +48,27 @@ def _make_engine(voice_name: str, rate: int):
     return engine
 
 
+# SAPI SpVoice.Speak flags
+_SVSF_ASYNC = 1
+_SVSF_PURGE = 2
+
+
 class SpeechQueue:
-    """A persistent background speaker. Push text; it speaks in FIFO order."""
+    """A persistent background speaker. Push text; it speaks in FIFO order.
+
+    Speaking is asynchronous and *interruptible*: :meth:`stop` purges whatever is
+    playing and drops the backlog (used for barge-in — the user starts talking
+    over JARVIS). ``on_finished`` fires once the queue drains after speaking, so
+    the caller can resume listening.
+    """
 
     def __init__(self) -> None:
         self._q: "queue.Queue[str | None]" = queue.Queue()
         self._voice = ""
         self._rate = 0
+        self._interrupt = threading.Event()
+        self._speaking = False
+        self.on_finished = None  # called from the TTS thread when the queue empties
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -64,7 +78,12 @@ class SpeechQueue:
     def say(self, text: str) -> None:
         text = (text or "").strip()
         if text:
+            self._interrupt.clear()
             self._q.put(text)
+
+    @property
+    def is_speaking(self) -> bool:
+        return self._speaking or not self._q.empty()
 
     def clear(self) -> None:
         """Drop anything still queued (e.g. user starts a new request)."""
@@ -74,9 +93,13 @@ class SpeechQueue:
         except queue.Empty:
             pass
 
+    def stop(self) -> None:
+        """Interrupt current speech and drop the backlog (barge-in)."""
+        self._interrupt.set()
+        self.clear()
+
     def _run(self) -> None:
         pythoncom.CoInitialize()
-        engine = None
         while True:
             text = self._q.get()
             if text is None:
@@ -84,6 +107,19 @@ class SpeechQueue:
             try:
                 # Rebuild each turn so voice/rate changes take effect.
                 engine = _make_engine(self._voice, self._rate)
-                engine.Speak(text)
+                self._speaking = True
+                engine.Speak(text, _SVSF_ASYNC)
+                while not engine.WaitUntilDone(40):
+                    if self._interrupt.is_set():
+                        engine.Speak("", _SVSF_PURGE)  # purge on our own thread
+                        break
             except Exception:
                 pass
+            finally:
+                self._speaking = False
+            # Fire idle callback only when nothing is queued and not interrupted.
+            if self._q.empty() and not self._interrupt.is_set() and self.on_finished:
+                try:
+                    self.on_finished()
+                except Exception:
+                    pass

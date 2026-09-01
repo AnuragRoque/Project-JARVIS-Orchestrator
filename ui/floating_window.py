@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 from jarvis.ui.styles import VOICE_STYLE
 from jarvis.ui.widgets.chat_view import ChatView
 
-CARD_W, CARD_H = 380, 560
+CARD_W, CARD_H = 400, 600
 ORB = 92
 
 
