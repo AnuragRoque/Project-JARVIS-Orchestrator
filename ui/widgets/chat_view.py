@@ -73,14 +73,14 @@ class MicButton(QPushButton):
 class Bubble(QWidget):
     """A single chat message aligned left/right by role."""
 
-    def __init__(self, role: str, text: str) -> None:
+    def __init__(self, role: str, text: str, max_width: int = 460) -> None:
         super().__init__()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(text)
         self.label.setObjectName(f"Bubble_{role}")
         self.label.setWordWrap(True)
-        self.label.setMaximumWidth(460)
+        self.label.setMaximumWidth(max_width)
         self.label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         if role == "user":
@@ -97,6 +97,77 @@ class Bubble(QWidget):
         self.label.setText(text)
 
 
+class StepView(QWidget):
+    """A collapsed 'View command' chip (left-aligned) that expands to show the
+    tool's command/arguments and its result. Keeps commands out of the way while
+    staying one click from full detail — shown *under* the reply, never centred.
+    """
+
+    def __init__(self, name: str, args: str, max_width: int = 460) -> None:
+        super().__init__()
+        self._name = name
+        self._args = args or ""
+        self._result = ""
+        self._open = False
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        col = QVBoxLayout()
+        col.setSpacing(4)
+
+        self.header = QPushButton()
+        self.header.setObjectName("StepHeader")
+        self.header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header.setMaximumWidth(max_width)
+        self.header.clicked.connect(self._toggle)
+
+        self.detail = QLabel()
+        self.detail.setObjectName("StepDetail")
+        self.detail.setWordWrap(True)
+        self.detail.setMaximumWidth(max_width)
+        self.detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.detail.hide()
+
+        col.addWidget(self.header)
+        col.addWidget(self.detail)
+        row.addLayout(col)
+        row.addStretch(1)
+        self._running(True)
+
+    def _label(self) -> str:
+        pretty = "command" if self._name == "run_powershell" else self._name.replace("_", " ")
+        arrow = "▾" if self._open else "▸"
+        state = "" if self._result or not self._busy else " · running…"
+        return f"{arrow}  {'View ' if not self._open else ''}{pretty}{state}"
+
+    def _running(self, busy: bool) -> None:
+        self._busy = busy
+        self.header.setText(self._label())
+
+    def _toggle(self) -> None:
+        self._open = not self._open
+        self.detail.setVisible(self._open)
+        self.header.setText(self._label())
+        if self._open:
+            self._render_detail()
+
+    def _render_detail(self) -> None:
+        parts = []
+        if self._args:
+            parts.append(f"$ {self._args}")
+        if self._result:
+            parts.append(self._result)
+        self.detail.setText("\n".join(parts) or "(no output)")
+
+    def set_result(self, preview: str) -> None:
+        self._result = preview or ""
+        self._running(False)
+        if self._open:
+            self._render_detail()
+
+
 class ChatView(QWidget):
     """Conversation + input, bound to a shared VoiceController."""
 
@@ -104,9 +175,10 @@ class ChatView(QWidget):
         super().__init__(parent)
         self.ctrl = controller
         self.compact = compact
+        self._max_bubble = 300 if compact else 560
         self._stream_bubble: Bubble | None = None
         self._stream_text = ""
-        self._step_bubble: Bubble | None = None
+        self._step_view: StepView | None = None
 
         self._build()
         self._replay_history()
@@ -190,10 +262,16 @@ class ChatView(QWidget):
 
     # ------------------------------------------------------------- helpers
     def _add_bubble(self, role: str, text: str) -> Bubble:
-        bubble = Bubble(role, text)
+        bubble = Bubble(role, text, max_width=self._max_bubble)
         self.chat_lay.insertWidget(self.chat_lay.count() - 1, bubble)
         self._scroll_to_bottom()
         return bubble
+
+    def _add_step(self, name: str, args: str) -> StepView:
+        step = StepView(name, args, max_width=self._max_bubble)
+        self.chat_lay.insertWidget(self.chat_lay.count() - 1, step)
+        self._scroll_to_bottom()
+        return step
 
     def _scroll_to_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
@@ -211,6 +289,12 @@ class ChatView(QWidget):
             return
         self.input.clear()
         self.ctrl.send_text(text)
+
+    def prefill(self, text: str) -> None:
+        """Put text in the input box and focus it (does not send)."""
+        self.input.setText(text)
+        self.input.setFocus()
+        self.input.setCursorPosition(len(text))
 
     # --------------------------------------------------- controller signals
     def _wire(self) -> None:
@@ -252,16 +336,15 @@ class ChatView(QWidget):
         self._stream_text = ""
 
     def _on_tool_started(self, name: str, args: str) -> None:
-        label = f"⚙ {name}" + (f" · {args}" if args else "")
-        self._step_bubble = self._add_bubble("system", label[:220])
+        self._step_view = self._add_step(name, args[:400])
 
     def _on_tool_finished(self, name: str, preview: str) -> None:
-        text = f"⚙ {name} → {preview}" if preview else f"⚙ {name} ✓"
-        if self._step_bubble is not None:
-            self._step_bubble.set_text(text[:400])
-            self._step_bubble = None
+        if self._step_view is not None:
+            self._step_view.set_result(preview[:600])
+            self._step_view = None
         else:
-            self._add_bubble("system", text[:400])
+            step = self._add_step(name, "")
+            step.set_result(preview[:600])
         self._scroll_to_bottom()
 
     def _on_busy(self, busy: bool) -> None:
