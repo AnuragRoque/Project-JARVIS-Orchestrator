@@ -161,10 +161,14 @@ class TimelineModule(Module):
             item = self._by_ref[self._order[int(index) - 1]]
         if item is None:
             return {"ok": False,
-                    "error": "No such result. Run recall_search or browser_recall first."}
+                    "error": ("No such result — the current list is empty or that "
+                              "index doesn't exist. Run a fresh recall_search / "
+                              "browser_recall / list_recent_files first; do NOT open "
+                              "an item from an earlier list.")}
         try:
             msg = open_result(item)
-            return {"ok": True, "message": msg}
+            return {"ok": True, "message": msg,
+                    "opened": (item.get("title") or "").strip()[:120] or _detail(item)}
         except OpenError as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -200,7 +204,11 @@ class TimelineModule(Module):
                 "detail": _detail(r),
                 "when": _when(r.get("start_time")),
             })
-        return {"query": query, "count": len(items), "results": items}
+        out = {"query": query, "count": len(items), "results": items}
+        if not items:
+            out["note"] = ("Nothing matched. Tell the user you couldn't find it; "
+                           "do NOT open an item from any earlier list.")
+        return out
 
 
 # --------------------------------------------------------------- utilities

@@ -41,6 +41,9 @@ class MainWindow(QMainWindow):
         self.repo = get_repository()
         self.search_engine = get_search_engine()
         self.current_section = "today"
+        # Optional hook set by the host shell: send an activity item to the hub.
+        # Signature: send_to_jarvis(result: dict) -> None. Stays None standalone.
+        self.send_to_jarvis = None
 
         self.setWindowTitle("Windows Activity Recall")
         self.resize(980, 680)
@@ -313,10 +316,16 @@ class MainWindow(QMainWindow):
         result = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
         act_open = menu.addAction("Open")
+        act_ask = menu.addAction("Ask JARVIS about this") if self.send_to_jarvis else None
         act_del = menu.addAction("Delete from history")
         chosen = menu.exec(self.results.mapToGlobal(pos))
         if chosen == act_open:
             self._open_selected(item)
+        elif act_ask is not None and chosen == act_ask:
+            try:
+                self.send_to_jarvis(result)
+            except Exception:
+                pass
         elif chosen == act_del:
             if result.get("id", -1) >= 0:
                 self.repo.delete_records(result["kind"], [result["id"]])
