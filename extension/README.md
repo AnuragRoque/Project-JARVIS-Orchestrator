@@ -4,6 +4,7 @@ Sends the pages you actively view to your **local** Windows Activity Recall app.
 Data never leaves your machine — the extension only talks to
 `http://127.0.0.1:8123`.
 
+
 ## Install (unpacked)
 
 1. Make sure the desktop app is running (`python main.py`).
