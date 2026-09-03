@@ -63,7 +63,7 @@ class SettingsTab(QWidget):
         self.col.addStretch(1)
 
     def _flash_saved(self) -> None:
-        self.saved.setText("Saved ✓")
+        self.saved.setText("Saved")
         QTimer.singleShot(1400, lambda: self.saved.setText(""))
 
     def _group(self, title: str) -> QFormLayout:
@@ -119,12 +119,22 @@ class SettingsTab(QWidget):
                                    note="applies on restart"))
         form.addRow("Model", model)
 
+        from jarvis.ui.theme import THEMES, theme_manager
         theme = QComboBox()
-        theme.addItems(["dark", "light"])
-        theme.setCurrentText(str(self.gs.get("theme") or "dark"))
-        theme.currentTextChanged.connect(
-            lambda v: self._save_global("theme", v, note="applies on restart"))
+        self._theme_keys = list(THEMES.keys())
+        for key in self._theme_keys:
+            theme.addItem(THEMES[key].label, key)
+        current = theme_manager.current_key()
+        theme.setCurrentIndex(
+            self._theme_keys.index(current) if current in self._theme_keys else 0)
+        theme.currentIndexChanged.connect(
+            lambda i: self._on_theme(theme.itemData(i)))
         form.addRow("Theme", theme)
+
+        dim = QCheckBox("Dim the floating window when idle")
+        dim.setChecked(bool(self.gs.get("dim_when_idle", True)))
+        dim.toggled.connect(lambda v: self._save_global("dim_when_idle", bool(v)))
+        form.addRow("", dim)
 
         start_min = QCheckBox("Start minimised to the tray")
         start_min.setChecked(bool(self.gs.get("start_minimized")))
@@ -222,7 +232,7 @@ class SettingsTab(QWidget):
         self.gs.set(key, value)
         self._flash_saved()
         if note:
-            self.saved.setText(f"Saved ✓ ({note})")
+            self.saved.setText(f"Saved ({note})")
 
     def _save_cfg(self, key, value, note: str = "") -> None:
         try:
@@ -231,10 +241,15 @@ class SettingsTab(QWidget):
             log.debug("cfg save failed", exc_info=True)
         self._flash_saved()
         if note:
-            self.saved.setText(f"Saved ✓ ({note})")
+            self.saved.setText(f"Saved ({note})")
 
     def _on_mode(self, text: str) -> None:
         self.ctrl.set_permission_mode(text.lower())
+        self._flash_saved()
+
+    def _on_theme(self, key: str) -> None:
+        from jarvis.ui.theme import theme_manager
+        theme_manager.set_theme(key)   # persists + repaints every surface live
         self._flash_saved()
 
     def _on_wake(self) -> None:
@@ -255,7 +270,7 @@ class SettingsTab(QWidget):
         sarvam = self.k_sarvam.text().strip()
         try:
             self.ctrl.cfg.set_keys(openai, sarvam)
-            self.saved.setText("Saved ✓ (keys apply on restart)")
+            self.saved.setText("Saved (keys apply on restart)")
             QTimer.singleShot(1600, lambda: self.saved.setText(""))
         except Exception:
             log.debug("key save failed", exc_info=True)

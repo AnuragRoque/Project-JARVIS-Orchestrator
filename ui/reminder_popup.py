@@ -21,30 +21,10 @@ from PyQt6.QtWidgets import (
 
 from jarvis.app.bus import bus
 from jarvis.app.logsetup import get_logger
-from jarvis.ui.styles import ACCENT, ACCENT_2
+from jarvis.ui.icons import lucide_data_uri
+from jarvis.ui.theme import theme_manager, toast_qss
 
 log = get_logger("reminder.popup")
-
-_TOAST_STYLE = f"""
-#ToastCard {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(24,27,33,0.98), stop:1 rgba(13,15,19,0.99));
-    border: 1px solid {ACCENT};
-    border-radius: 16px;
-}}
-#ToastTitle {{ color: {ACCENT}; font-size: 12px; font-weight: 800; letter-spacing: 1px; }}
-#ToastText {{ color: #f2f4f8; font-size: 15px; font-weight: 600; }}
-#ToastBtn {{
-    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 10px; padding: 6px 14px; color: #e9edf3; font-size: 12px;
-}}
-#ToastBtn:hover {{ background: rgba(47,155,255,0.18); }}
-#ToastPrimary {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT_2}, stop:1 {ACCENT});
-    border: none; border-radius: 10px; padding: 6px 14px; color: #fff;
-    font-size: 12px; font-weight: 700;
-}}
-"""
 
 
 class Toast(QWidget):
@@ -59,7 +39,8 @@ class Toast(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(340)
-        self.setStyleSheet(_TOAST_STYLE)
+        pal = theme_manager.palette()
+        self.setStyleSheet(toast_qss(pal))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
@@ -73,7 +54,8 @@ class Toast(QWidget):
         lay = QVBoxLayout(card)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(10)
-        title = QLabel("⏰  REMINDER")
+        bell = lucide_data_uri("bell", color=pal.accent, size=13)
+        title = QLabel(f'<img src="{bell}" width="13" height="13">&nbsp; REMINDER')
         title.setObjectName("ToastTitle")
         lay.addWidget(title)
         body = QLabel(text)

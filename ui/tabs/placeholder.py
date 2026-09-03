@@ -4,7 +4,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from jarvis.ui.styles import PLACEHOLDER_STYLE
+from jarvis.ui.theme import placeholder_qss, theme_manager
 
 
 class Placeholder(QWidget):
@@ -12,7 +12,8 @@ class Placeholder(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Placeholder")
-        self.setStyleSheet(PLACEHOLDER_STYLE)
+        self._apply_theme()
+        theme_manager.changed.connect(self._apply_theme)
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.setSpacing(12)
@@ -35,3 +36,6 @@ class Placeholder(QWidget):
         d.setWordWrap(True)
         d.setMaximumWidth(520)
         lay.addWidget(d)
+
+    def _apply_theme(self) -> None:
+        self.setStyleSheet(placeholder_qss(theme_manager.palette()))

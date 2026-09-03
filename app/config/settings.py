@@ -17,9 +17,12 @@ DEFAULTS: dict[str, Any] = {
     "permission_mode": "partial",        # auto | partial | manual
     "wake_words": ["jarvis"],            # multiple supported (Phase 5 always-on)
     "require_wake_word": False,
-    "theme": "dark",
+    "theme": "blue",                     # global theme key (see ui/theme.py)
     "start_minimized": False,            # start into the tray only
     "autostart": False,                  # launch on Windows login (Phase 8)
+    "float_pos": None,                   # remembered orb position [x, y]
+    "float_size": [400, 600],            # remembered orb card size [w, h]
+    "dim_when_idle": True,               # fade the floating window when unhovered
     "tab_order": [
         "voice", "timeline", "terminal", "logs", "settings", "dashboard",
     ],

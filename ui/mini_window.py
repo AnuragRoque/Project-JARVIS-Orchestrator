@@ -14,7 +14,7 @@ time — the Runner enforces that.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -274,7 +274,6 @@ class MiniBar(QWidget):
     def _scroll_to_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
         # Defer one tick so the freshly-added row is laid out before we scroll.
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
 
     def _replay(self) -> None:
@@ -351,7 +350,10 @@ class MiniBar(QWidget):
         self.bars.set_mode(bars)
         self.bars.setVisible(bars != "off")
         self.dots.setVisible(dots)
-        self.dots.start() if dots else self.dots.stop()
+        if dots:
+            self.dots.start()
+        else:
+            self.dots.stop()
         self.activity_label.setText(label)
 
     def _on_mode(self, mode: str) -> None:
