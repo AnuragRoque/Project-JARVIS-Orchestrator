@@ -12,13 +12,16 @@ from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 
-def make_icon() -> QIcon:
-    """A simple round 'J' badge drawn in code (no asset file needed)."""
+def make_icon(color: str = "#2b62ff") -> QIcon:
+    """A simple round 'J' badge drawn in code (no asset file needed).
+
+    ``color`` reflects the permission mode so the tray, like the orb, signals how
+    much autonomy JARVIS has (blue Manual / amber Partial / red Auto)."""
     pix = QPixmap(64, 64)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QColor("#2b62ff"))
+    p.setBrush(QColor(color))
     p.setPen(Qt.PenStyle.NoPen)
     p.drawEllipse(4, 4, 56, 56)
     p.setPen(QColor("white"))
@@ -37,17 +40,23 @@ class Tray:
         on_open: Callable[[], None],
         on_quit: Callable[[], None],
         on_toggle_pause: Callable[[], bool] | None = None,
+        on_mini: Callable[[], None] | None = None,
     ) -> None:
         self.icon = make_icon()
         self._on_open = on_open
         self._on_quit = on_quit
         self._on_toggle_pause = on_toggle_pause
+        self._on_mini = on_mini
 
         self.tray = QSystemTrayIcon(self.icon)
         self.tray.setToolTip("JARVIS")
 
         menu = QMenu()
-        act_open = QAction("Open JARVIS", menu)
+        if on_mini is not None:
+            act_mini = QAction("Quick bar", menu)
+            act_mini.triggered.connect(lambda: on_mini())
+            menu.addAction(act_mini)
+        act_open = QAction("Open full window", menu)
         act_open.triggered.connect(lambda: on_open())
         menu.addAction(act_open)
 
@@ -66,10 +75,10 @@ class Tray:
         self.tray.show()
 
     def _on_activated(self, reason) -> None:
-        if reason in (
-            QSystemTrayIcon.ActivationReason.Trigger,
-            QSystemTrayIcon.ActivationReason.DoubleClick,
-        ):
+        # Single click → the quick bar above the tray; double click → full window.
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            (self._on_mini or self._on_open)()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._on_open()
 
     def _toggle_pause(self) -> None:
@@ -78,6 +87,11 @@ class Tray:
         paused = self._on_toggle_pause()
         self.act_pause.setText(
             "Resume activity tracking" if paused else "Pause activity tracking")
+
+    def set_accent(self, color: str) -> None:
+        """Retint the tray badge (called when the permission mode changes)."""
+        self.icon = make_icon(color)
+        self.tray.setIcon(self.icon)
 
     def message(self, title: str, body: str, msecs: int = 3000) -> None:
         self.tray.showMessage(title, body, self.icon, msecs)

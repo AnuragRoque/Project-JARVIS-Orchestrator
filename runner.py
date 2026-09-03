@@ -29,6 +29,7 @@ class Runner:
         self.controller = None
         self.floating = None
         self.main_window = None
+        self.mini = None
         self.tray = None
         self.tracker = None
         self.file_service = None
@@ -202,7 +203,20 @@ class Runner:
             on_open=self._open_main,
             on_quit=self._quit,
             on_toggle_pause=self._toggle_pause if self.tracker else None,
+            on_mini=self._open_mini,
         )
+        # Tint the tray badge to the permission "mood" (blue/amber/red), in sync
+        # with the floating orb.
+        try:
+            from jarvis.ui.theme import permission_accent
+
+            def _tint(mode: str) -> None:
+                self.tray.set_accent(permission_accent(mode)[0])
+
+            self.controller.permission_mode_changed.connect(_tint)
+            _tint(self.controller.permission_mode)
+        except Exception:
+            log.exception("Tray tint wiring failed (continuing)")
         # Surface swallowed background errors as a quiet tray nudge (throttled).
         set_error_notifier(lambda msg: self.tray and self.tray.message("JARVIS", msg))
 
@@ -295,14 +309,44 @@ class Runner:
             from jarvis.ui.main_window import MainWindow
             self.main_window = MainWindow(
                 self.controller, tracker=self.tracker, engine=self.pw_engine,
-                modules=self._modules)
+                modules=self._modules, on_hide=self._open_floating)
         return self.main_window
 
+    def _ensure_mini(self):
+        if self.mini is None:
+            from jarvis.ui.mini_window import MiniBar
+            self.mini = MiniBar(self.controller)
+            self.mini.request_floating.connect(self._open_floating)
+            self.mini.request_maximise.connect(self._open_main)
+        return self.mini
+
+    # Only one surface — quick bar / orb / full window — is shown at a time.
     def _open_main(self) -> None:
         win = self._ensure_main()
+        if self.mini:
+            self.mini.hide()
+        if self.floating:
+            self.floating.hide()
+        win.fit_to_screen()          # auto-size to the screen, never overflow
         win.show()
         win.raise_()
         win.activateWindow()
+
+    def _open_mini(self) -> None:
+        mini = self._ensure_mini()
+        if self.floating:
+            self.floating.hide()
+        if self.main_window and self.main_window.isVisible():
+            self.main_window.hide()
+        mini.show_above_tray()
+
+    def _open_floating(self) -> None:
+        if self.mini:
+            self.mini.hide()
+        if self.main_window and self.main_window.isVisible():
+            self.main_window.hide()
+        if self.floating:
+            self.floating.show_and_raise()
 
     def _toggle_pause(self) -> bool:
         if not self.tracker:
