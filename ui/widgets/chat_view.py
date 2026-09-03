@@ -6,11 +6,12 @@ state. Construct after the controller so history replay works.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, Qt, pyqtProperty
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, pyqtProperty
+from PyQt6.QtGui import QColor, QIcon, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,14 +21,33 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from jarvis.ui.icons import lucide_data_uri, lucide_icon, lucide_pixmap
+from jarvis.ui.theme import dot_pixmap, permission_accent, theme_manager
+from jarvis.ui.widgets.icon_button import IconButton
+
 
 class MicButton(QPushButton):
-    """Circular mic button with an animated glow ring while active."""
+    """Circular mic button with an animated glow ring while active.
 
-    def __init__(self, object_name: str = "Mic") -> None:
-        super().__init__("\U0001F3A4")  # 🎤
+    ``idle_icon`` / ``active_icon`` let the two mics read differently: the big
+    hands-free **Live** button shows a waveform, the one-shot recorder shows a
+    plain mic — and both switch to a stop-square while active.
+    """
+
+    def __init__(self, object_name: str = "Mic", icon_px: int = 24,
+                 idle_icon: str = "mic", active_icon: str = "square",
+                 idle_color: str = "#ffffff", active_color: str = "#ffffff") -> None:
+        super().__init__()
         self.setObjectName(object_name)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._icon_px = icon_px
+        self._idle_icon = idle_icon
+        self._active_icon = active_icon
+        self._idle_color = idle_color
+        self._active_color = active_color
+        self._recording = False
+        self.setIconSize(QSize(icon_px, icon_px))
+        self._render()
         self._glow = 0.0
         self._anim = QPropertyAnimation(self, b"glow")
         self._anim.setStartValue(0.0)
@@ -45,10 +65,22 @@ class MicButton(QPushButton):
 
     glow = pyqtProperty(float, fget=get_glow, fset=set_glow)
 
+    def _render(self) -> None:
+        icon = self._active_icon if self._recording else self._idle_icon
+        color = self._active_color if self._recording else self._idle_color
+        self.setIcon(lucide_icon(icon, color=color, size=self._icon_px))
+
+    def set_idle_color(self, color: str) -> None:
+        self._idle_color = color
+        if not self._recording:
+            self._render()
+
     def set_recording(self, on: bool) -> None:
+        self._recording = on
         self.setProperty("recording", "true" if on else "false")
         self.style().unpolish(self)
         self.style().polish(self)
+        self._render()
         if on:
             self._anim.start()
         else:
@@ -120,6 +152,7 @@ class StepView(QWidget):
         self.header.setObjectName("StepHeader")
         self.header.setCursor(Qt.CursorShape.PointingHandCursor)
         self.header.setMaximumWidth(max_width)
+        self.header.setIconSize(QSize(13, 13))
         self.header.clicked.connect(self._toggle)
 
         self.detail = QLabel()
@@ -138,18 +171,22 @@ class StepView(QWidget):
 
     def _label(self) -> str:
         pretty = "command" if self._name == "run_powershell" else self._name.replace("_", " ")
-        arrow = "▾" if self._open else "▸"
         state = "" if self._result or not self._busy else " · running…"
-        return f"{arrow}  {'View ' if not self._open else ''}{pretty}{state}"
+        return f"  {'View ' if not self._open else ''}{pretty}{state}"
+
+    def _render_header(self) -> None:
+        chevron = "chevron-down" if self._open else "chevron-right"
+        self.header.setIcon(lucide_icon(chevron, color="#7f9ac0", size=13))
+        self.header.setText(self._label())
 
     def _running(self, busy: bool) -> None:
         self._busy = busy
-        self.header.setText(self._label())
+        self._render_header()
 
     def _toggle(self) -> None:
         self._open = not self._open
         self.detail.setVisible(self._open)
-        self.header.setText(self._label())
+        self._render_header()
         if self._open:
             self._render_detail()
 
@@ -191,15 +228,19 @@ class ChatView(QWidget):
         lay.setContentsMargins(m, m, m, m)
         lay.setSpacing(10)
 
-        # Permission-mode toggle (shared, persisted via the controller).
+        # Permission-mode toggle (shared, persisted via the controller). The dot
+        # + shield colour signal the "robot mood": blue safe, amber supervised,
+        # red unrestrained.
         mode_row = QHBoxLayout()
         mode_row.setSpacing(6)
-        shield = QLabel("🛡")
-        shield.setObjectName("Subtitle")
-        mode_row.addWidget(shield)
+        self.shield = QLabel()
+        self.shield.setObjectName("Subtitle")
+        mode_row.addWidget(self.shield)
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("ModeCombo")
-        self.mode_combo.addItems(["Auto", "Partial", "Manual"])
+        for label in ("Auto", "Partial", "Manual"):
+            a, _ = permission_accent(label.lower())
+            self.mode_combo.addItem(QIcon(dot_pixmap(a, 11)), label)
         self.mode_combo.setCurrentText(self.ctrl.permission_mode.capitalize())
         self.mode_combo.currentTextChanged.connect(
             lambda t: self.ctrl.set_permission_mode(t.lower()))
@@ -209,6 +250,7 @@ class ChatView(QWidget):
         mode_row.addWidget(self.mode_combo)
         mode_row.addStretch(1)
         lay.addLayout(mode_row)
+        self._recolor_shield()
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -235,30 +277,68 @@ class ChatView(QWidget):
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.status)
 
+        # The big hands-free "Live" button — a waveform, distinct from the
+        # one-shot recorder mic below.
         mic_row = QHBoxLayout()
         mic_row.addStretch()
-        self.mic = MicButton("Mic")
+        self.mic = MicButton("Mic", icon_px=26, idle_icon="audio-lines",
+                             active_icon="square")
+        self.mic.setToolTip("Live hands-free conversation (tap to stop)")
         self.mic.clicked.connect(self.ctrl.toggle_live)
         mic_row.addWidget(self.mic)
         mic_row.addStretch()
         lay.addLayout(mic_row)
 
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
-        self.mic_small = MicButton("MicMini")
-        self.mic_small.clicked.connect(self.ctrl.toggle_record)
+        # Input field with the one-shot recorder mic tucked inside it.
         self.input = QLineEdit()
         self.input.setObjectName("Input")
         self.input.setPlaceholderText("Type a message…")
         self.input.returnPressed.connect(self._send_typed)
-        send = QPushButton("Send")
-        send.setObjectName("Ghost")
-        send.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.input.installEventFilter(self)
+        self.mic_small = MicButton("MicMini", icon_px=16, idle_icon="mic",
+                                   active_icon="square")
+        self.mic_small.setToolTip("Record one message")
+        self.mic_small.clicked.connect(self.ctrl.toggle_record)
+
+        self.input_wrap = QFrame()
+        self.input_wrap.setObjectName("InputWrap")
+        wrap_lay = QHBoxLayout(self.input_wrap)
+        wrap_lay.setContentsMargins(4, 3, 6, 3)
+        wrap_lay.setSpacing(2)
+        wrap_lay.addWidget(self.input, 1)
+        wrap_lay.addWidget(self.mic_small)
+
+        send = IconButton("send", color="#ffffff", hover_color="#ffffff",
+                          size=18, object_name="Send", tooltip="Send")
         send.clicked.connect(self._send_typed)
-        input_row.addWidget(self.mic_small)
-        input_row.addWidget(self.input, 1)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+        input_row.addWidget(self.input_wrap, 1)
         input_row.addWidget(send)
         lay.addLayout(input_row)
+
+        self._recolor_icons()
+        theme_manager.changed.connect(self._recolor_icons)
+
+    # -------------------------------------------------------- icon colours
+    def _recolor_shield(self) -> None:
+        accent, _ = permission_accent(self.ctrl.permission_mode)
+        self.shield.setPixmap(lucide_pixmap("shield-check", color=accent, size=14))
+
+    def _recolor_icons(self) -> None:
+        pal = theme_manager.palette()
+        self.mic_small.set_idle_color(pal.subtext)
+        self._recolor_shield()
+
+    def eventFilter(self, obj, event):  # noqa: ANN001
+        if obj is self.input and event.type() in (
+                QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            focused = event.type() == QEvent.Type.FocusIn
+            self.input_wrap.setProperty("focused", "true" if focused else "false")
+            self.input_wrap.style().unpolish(self.input_wrap)
+            self.input_wrap.style().polish(self.input_wrap)
+        return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------- helpers
     def _add_bubble(self, role: str, text: str) -> Bubble:
@@ -304,7 +384,7 @@ class ChatView(QWidget):
         c.reply_chunk.connect(self._on_reply_chunk)
         c.reply_finished.connect(self._on_reply_finished)
         c.status_changed.connect(self.status.setText)
-        c.error_occurred.connect(lambda m: self._add_bubble("system", f"⚠ {m}"))
+        c.error_occurred.connect(self._on_error_msg)
         c.busy_changed.connect(self._on_busy)
         c.recording_changed.connect(self.mic_small.set_recording)
         c.listening_changed.connect(self._on_listening)
@@ -318,6 +398,12 @@ class ChatView(QWidget):
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentText(want)
             self.mode_combo.blockSignals(False)
+        self._recolor_shield()
+
+    def _on_error_msg(self, message: str) -> None:
+        uri = lucide_data_uri("alert-triangle", color="#ff8791", size=12)
+        self._add_bubble("system",
+                         f'<img src="{uri}" width="12" height="12">&nbsp; {message}')
 
     def _on_reply_started(self) -> None:
         self._stream_text = ""
