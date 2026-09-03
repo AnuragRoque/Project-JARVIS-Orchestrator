@@ -4,7 +4,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 _KIND_META = {
     "session": ("🖥️", "#2b62ff"),
@@ -68,6 +75,9 @@ def make_result_widget(result: dict) -> QWidget:
     title_lbl = QLabel(title)
     title_lbl.setStyleSheet("font-size: 14px; font-weight: 600; color: #e6e8ee;")
     title_lbl.setWordWrap(False)
+    # Let long titles shrink instead of forcing a huge minimum width on the whole
+    # list (and, through it, the app window).
+    title_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     title_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
     col.addWidget(title_lbl)
 
@@ -80,6 +90,7 @@ def make_result_widget(result: dict) -> QWidget:
         sub = result.get("app", "")
     sub_lbl = QLabel(sub)
     sub_lbl.setStyleSheet("color: #8b93a3; font-size: 12px;")
+    sub_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     col.addWidget(sub_lbl)
     outer.addLayout(col, 1)
 

@@ -1,7 +1,7 @@
 """Tab 2 — Activity Timeline (embeds the ported recall window)."""
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
 from jarvis.modules.timeline.recall.ui.main_window import MainWindow as RecallWindow
 from jarvis.modules.timeline.recall.ui.theme import stylesheet
@@ -19,4 +19,10 @@ class TimelineTab(QWidget):
         self.window.close_to_tray = False
         if on_send_to_jarvis is not None:
             self.window.send_to_jarvis = on_send_to_jarvis
-        lay.addWidget(self.window)
+        # Wrap it so its large minimum size can't force the whole app window
+        # past the screen edge; it scrolls internally on small windows.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self.window)
+        lay.addWidget(scroll)
