@@ -2,27 +2,40 @@
 
 It shares the app's single :class:`VoiceController`, so it can take voice/text
 and execute everything on its own. The maximise button opens the full tabbed
-window. Collapses to a small orb; drag anywhere to move.
+window; it collapses to a live, audio-reactive orb and can be dragged anywhere.
+
+Two things colour it: the **global theme** (background/panel/text) and the
+**permission accent** — blue Manual / amber Partial / red Auto — which tints the
+orb, mic and highlights so the window itself signals how much autonomy JARVIS
+currently has.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
-    QPushButton,
+    QSizeGrip,
     QVBoxLayout,
     QWidget,
 )
 
-from jarvis.ui.styles import VOICE_STYLE
+from jarvis.app.config.settings import get_settings
+from jarvis.app.logsetup import get_logger
+from jarvis.ui.theme import glass_qss, permission_accent, theme_manager
 from jarvis.ui.widgets.chat_view import ChatView
+from jarvis.ui.widgets.icon_button import IconButton
+from jarvis.ui.widgets.orb import Orb
+
+log = get_logger("floating")
 
 CARD_W, CARD_H = 400, 600
-ORB = 92
+CARD_MIN_W, CARD_MIN_H = 320, 440
+ORB_WIN = 92          # window size while collapsed
+DIM_OPACITY = 0.90
 
 
 class FloatingWindow(QWidget):
@@ -36,18 +49,33 @@ class FloatingWindow(QWidget):
         self._moved = False
         self._collapsed = False
 
+        # live state (drives the orb)
+        self._live = False
+        self._busy = False
+        self._speaking = False
+
+        gs = get_settings()
+        size = gs.get("float_size") or [CARD_W, CARD_H]
+        self._card_w = int(size[0]) if size else CARD_W
+        self._card_h = int(size[1]) if size else CARD_H
+        self._dim = bool(gs.get("dim_when_idle", True))
+
         self.setWindowTitle("JARVIS")
-        self.setFixedSize(CARD_W, CARD_H)
+        self.setMinimumSize(CARD_MIN_W, CARD_MIN_H)
+        self.resize(self._card_w, self._card_h)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setStyleSheet(VOICE_STYLE)
 
         self._build()
-        self._center_top_right()
+        self._apply_theme()
+        self._wire_state()
+        theme_manager.changed.connect(self._apply_theme)
+
+        self._restore_position()
 
     # ------------------------------------------------------------------ UI
     def _build(self) -> None:
@@ -61,23 +89,14 @@ class FloatingWindow(QWidget):
         self.card.setGraphicsEffect(shadow)
         outer.addWidget(self.card)
 
-        self.orb = QWidget()
-        self.orb.setObjectName("Orb")
-        self.orb.setFixedSize(68, 68)
-        glow = QGraphicsDropShadowEffect(blurRadius=34, xOffset=0, yOffset=6)
-        glow.setColor(QColor(43, 130, 255, 170))
-        self.orb.setGraphicsEffect(glow)
-        orb_lay = QVBoxLayout(self.orb)
-        orb_lay.setContentsMargins(0, 0, 0, 0)
-        mark = QLabel("J")
-        mark.setObjectName("OrbMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        orb_lay.addWidget(mark)
+        # Collapsed state: the audio-reactive orb (transparent to the mouse; the
+        # window owns drag + tap-to-expand).
+        self.orb = Orb(68)
         self.orb.hide()
         outer.addWidget(self.orb, alignment=Qt.AlignmentFlag.AlignCenter)
 
         card_lay = QVBoxLayout(self.card)
-        card_lay.setContentsMargins(16, 14, 16, 8)
+        card_lay.setContentsMargins(16, 14, 16, 10)
         card_lay.setSpacing(8)
 
         # Title bar with window controls
@@ -93,47 +112,126 @@ class FloatingWindow(QWidget):
         bar.addLayout(titles)
         bar.addStretch()
 
-        maximise = QPushButton("☐")  # ☐ maximise → open full app
-        maximise.setObjectName("WinBtn")
-        maximise.setToolTip("Open the full window")
-        maximise.setCursor(Qt.CursorShape.PointingHandCursor)
-        maximise.clicked.connect(self.request_maximise.emit)
-        mini = QPushButton("–")       # – collapse to orb
-        mini.setObjectName("WinBtn")
-        mini.setCursor(Qt.CursorShape.PointingHandCursor)
-        mini.clicked.connect(self._collapse)
-        close = QPushButton("✕")      # ✕ hide (tray keeps app alive)
-        close.setObjectName("WinBtn")
-        close.setCursor(Qt.CursorShape.PointingHandCursor)
-        close.clicked.connect(self.hide)
-        for b in (maximise, mini, close):
+        self.btn_max = IconButton("maximize-2", size=15, tooltip="Open the full window")
+        self.btn_max.clicked.connect(self.request_maximise.emit)
+        self.btn_min = IconButton("minus", size=15, tooltip="Collapse to orb")
+        self.btn_min.clicked.connect(self._collapse)
+        self.btn_close = IconButton("x", size=15, tooltip="Hide (stays in the tray)",
+                                    hover_color="#ff6b7a")
+        self.btn_close.clicked.connect(self.hide)
+        for b in (self.btn_max, self.btn_min, self.btn_close):
             bar.addWidget(b)
         card_lay.addLayout(bar)
 
         self.view = ChatView(self.ctrl, compact=True)
         card_lay.addWidget(self.view, 1)
 
+        # Resize grip, tucked in the card's bottom-right corner.
+        self.grip = QSizeGrip(self.card)
+        self.grip.resize(14, 14)
+
+    # --------------------------------------------------------------- theme
+    def _accent(self) -> tuple[str, str]:
+        return permission_accent(self.ctrl.permission_mode)
+
+    def _apply_theme(self) -> None:
+        a, a2 = self._accent()
+        self.setStyleSheet(glass_qss(theme_manager.palette(), accent=a, accent2=a2))
+        self.orb.set_accent(a, a2)
+
+    # --------------------------------------------------- live state → orb
+    def _wire_state(self) -> None:
+        c = self.ctrl
+        c.listening_changed.connect(self._on_listening)
+        c.busy_changed.connect(self._on_busy)
+        c.status_changed.connect(self._on_status)
+        c.permission_mode_changed.connect(lambda _m: self._apply_theme())
+
+    def _on_listening(self, live: bool) -> None:
+        self._live = live
+        self._refresh_orb()
+
+    def _on_busy(self, busy: bool) -> None:
+        self._busy = busy
+        if not busy:
+            self._speaking = False
+        self._refresh_orb()
+
+    def _on_status(self, text: str) -> None:
+        self._speaking = "speak" in (text or "").lower()
+        self._refresh_orb()
+
+    def _refresh_orb(self) -> None:
+        if self._speaking:
+            state = "speaking"
+        elif self._busy:
+            state = "thinking"
+        elif self._live:
+            state = "listening"
+        else:
+            state = "idle"
+        self.orb.set_state(state)
+
     # --------------------------------------------------------------- layout
-    def _center_top_right(self) -> None:
+    def _restore_position(self) -> None:
+        pos = get_settings().get("float_pos")
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 30, screen.top() + 40)
+        if pos and len(pos) == 2:
+            x = max(screen.left(), min(int(pos[0]), screen.right() - self.width()))
+            y = max(screen.top(), min(int(pos[1]), screen.bottom() - self.height()))
+            self.move(x, y)
+        else:
+            self.move(screen.right() - self.width() - 30, screen.top() + 40)
+
+    def _persist_geometry(self) -> None:
+        gs = get_settings()
+        gs.set("float_pos", [self.x(), self.y()])
+        if not self._collapsed:
+            gs.set("float_size", [self.width(), self.height()])
 
     def _collapse(self) -> None:
+        self._card_w, self._card_h = self.width(), self.height()
         self._collapsed = True
         self.card.hide()
         self.orb.show()
-        self.setFixedSize(ORB, ORB)
+        self.setFixedSize(ORB_WIN, ORB_WIN)
 
     def _expand(self) -> None:
         self._collapsed = False
         self.orb.hide()
-        self.setFixedSize(CARD_W, CARD_H)
+        self.setMinimumSize(CARD_MIN_W, CARD_MIN_H)
+        self.setMaximumSize(16777215, 16777215)
+        self.resize(self._card_w, self._card_h)
         self.card.show()
 
     def show_and_raise(self) -> None:
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        if hasattr(self, "grip") and not self._collapsed:
+            self.grip.move(self.card.width() - self.grip.width() - 4,
+                           self.card.height() - self.grip.height() - 4)
+
+    # ------------------------------------------------------ dim when idle
+    def enterEvent(self, event) -> None:  # noqa: ANN001
+        self.setWindowOpacity(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: ANN001
+        # Defer: opening a dropdown/menu fires leaveEvent even though we're still
+        # interacting, so re-check on a short delay before dimming.
+        QTimer.singleShot(150, self._maybe_dim)
+        super().leaveEvent(event)
+
+    def _maybe_dim(self) -> None:
+        if not get_settings().get("dim_when_idle", True):
+            return
+        if self.underMouse() or QApplication.activePopupWidget() is not None:
+            return  # a popup (e.g. the mode dropdown) is open — keep full opacity
+        self.setWindowOpacity(DIM_OPACITY)
 
     # ----------------------------------------------------------- drag / tap
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
@@ -154,3 +252,5 @@ class FloatingWindow(QWidget):
         self._drag_pos = None
         if self._collapsed and was_tap:
             self._expand()
+        elif self._moved:
+            self._persist_geometry()   # remember where you left it (no snapping)
