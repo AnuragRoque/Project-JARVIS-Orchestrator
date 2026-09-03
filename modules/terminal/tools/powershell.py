@@ -68,10 +68,16 @@ class PowerShellEngine(QObject):
             self._process.setWorkingDirectory(start_dir)
 
         ps_path = _find_powershell_executable()
-        init = "[Console]::OutputEncoding=[Text.Encoding]::UTF8"
+        # -NonInteractive: a cmdlet that would prompt (e.g. Remove-Item on a
+        # non-empty dir asking "[Y] Yes [A] Yes to All…") must NEVER block this
+        # shared, headless shell — it would wedge every later command. The app's
+        # permission layer is the real gate; PowerShell's own prompts are not.
+        init = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+                "$ProgressPreference='SilentlyContinue'; $ConfirmPreference='None'")
         self._process.start(
             ps_path,
-            ["-NoLogo", "-NoProfile", "-NoExit", "-Command", init],
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-NoExit",
+             "-Command", init],
         )
 
         started = self._process.waitForStarted(3000)
@@ -179,6 +185,11 @@ class PowerShellEngine(QObject):
             return
         self._append_raw("\n[terminal] Command timed out after limit.\n")
         self._finish_capture(timed_out=True)
+        # A timed-out command may have left the shell mid-execution (or waiting
+        # at a prompt). Restart it so later commands run on a clean session
+        # instead of colliding with the stuck one.
+        self._append_raw("[terminal] Restarting the shell to recover.\n")
+        self.start_session()
 
     def _on_output(self) -> None:
         if not self._process:
