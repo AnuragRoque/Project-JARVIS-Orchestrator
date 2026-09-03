@@ -1,16 +1,23 @@
 """The quick bar — a tiny flyout docked above the system-tray icon.
 
-Clicking the tray icon pops this up just above the taskbar: a one-line
-controller with a **Live** toggle, a compact full-width transcript, an input
-with an inline mic + send, and the permission selector — plus buttons to grow
-into the floating orb or the full window.
+Design goals (per the product mock): **minimal height in normal mode, one item
+at a time, expand only when needed.** The flyout shows a single current item —
+either JARVIS *listening* (with a live waveform + stop), your *latest command*,
+or JARVIS's *latest reply* (with a thinking animation) — never a scrolling
+transcript. The full conversation lives in the orb / full window.
 
-The transcript is deliberately *not* the bubble chat: messages run full width,
-one after another (you, then JARVIS), scrollable up to a capped height with the
-scrollbar hidden. A small activity strip animates what JARVIS is doing right
-now — listening while Live is on, reacting while you speak, and thinking dots
-while it works. Only one surface (quick bar / orb / full window) is shown at a
-time — the Runner enforces that.
+Chrome, left to right:
+
+* Header — title, then the core surface controls: open the floating **orb**,
+  open the **full window**, and **close**.
+* Controls — a **Live** toggle, the **permission** pill (Auto / Partial /
+  Manual), and a **keyboard** chevron that flips the input between speaking and
+  typing.
+* Input — voice ("Ask JARVIS…" + mic) or keyboard ("Type to JARVIS…"), plus send.
+
+Only one surface (quick bar / orb / full window) is shown at a time — the Runner
+enforces that. None of the core wiring (Live, permission mode, mic, send, orb,
+full window) is changed here; this module only re-skins and re-arranges it.
 """
 from __future__ import annotations
 
@@ -31,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from jarvis.ui.icons import lucide_data_uri, lucide_icon
+from jarvis.ui.icons import lucide_data_uri, lucide_icon, lucide_pixmap
 from jarvis.ui.theme import dot_pixmap, glass_qss, permission_accent, theme_manager
 from jarvis.ui.widgets.activity import TypingDots, WaveBars
 from jarvis.ui.widgets.chat_view import MicButton
@@ -39,32 +46,113 @@ from jarvis.ui.widgets.icon_button import IconButton
 
 WIDTH = 360
 MARGIN = 8
-MAX_MESSAGES = 30
 
 
-class Message(QFrame):
-    """A single full-width conversation row: a small role caption over a
-    word-wrapped body. Spans the whole width — no left/right bubble alignment."""
+class ListenPanel(QWidget):
+    """Normal-mode 'JARVIS is listening' view: a label + prompt on the left, a
+    live waveform and a round stop button on the right."""
 
-    def __init__(self, role: str, text: str = "") -> None:
+    def __init__(self, on_stop) -> None:
         super().__init__()
-        user = role == "user"
-        self.setObjectName("MsgUser" if user else "MsgAssistant")
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 7, 12, 9)
-        lay.setSpacing(2)
-        cap = QLabel("YOU" if user else "JARVIS")
-        cap.setObjectName("MsgRoleUser" if user else "MsgRole")
-        self.body = QLabel(text)
-        self.body.setObjectName("MsgBodyUser" if user else "MsgBody")
-        self.body.setWordWrap(True)
-        self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lay.addWidget(cap)
-        lay.addWidget(self.body)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(2, 4, 2, 4)
+        row.setSpacing(8)
 
-    def set_text(self, text: str) -> None:
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        self.title = QLabel("Listening…")
+        self.title.setObjectName("ListenTitle")
+        self.sub = QLabel("Say something…")
+        self.sub.setObjectName("ListenSub")
+        texts.addWidget(self.title)
+        texts.addWidget(self.sub)
+        row.addLayout(texts)
+        row.addStretch(1)
+
+        self.bars = WaveBars(bars=7)
+        self.bars.setMinimumWidth(60)
+        row.addWidget(self.bars)
+
+        self.stop = IconButton("square", color="#ffffff", hover_color="#ffffff",
+                               size=15, object_name="StopBtn", tooltip="Stop listening")
+        self.stop.clicked.connect(on_stop)
+        row.addWidget(self.stop)
+
+    def set_speaking(self, speaking: bool) -> None:
+        self.bars.set_mode("active" if speaking else "calm")
+        self.sub.setText("Go ahead — I'm hearing you…" if speaking else "Say something…")
+
+
+class MessagePanel(QWidget):
+    """Normal-mode single message: a role marker (icon + name) with an optional
+    thinking animation, over a word-wrapped body that scrolls if it runs long."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        col = QVBoxLayout(self)
+        col.setContentsMargins(2, 4, 2, 4)
+        col.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        self.icon = QLabel()
+        self.name = QLabel("JARVIS")
+        self.name.setObjectName("RoleName")
+        self.dots = TypingDots()
+        self.dots.hide()
+        head.addWidget(self.icon)
+        head.addWidget(self.name)
+        head.addWidget(self.dots)
+        head.addStretch(1)
+        col.addLayout(head)
+
+        # Body hugs its content, scrolling (bar hidden) only past a capped height.
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        host = QWidget()
+        host.setObjectName("Chat")
+        hl = QVBoxLayout(host)
+        hl.setContentsMargins(0, 0, 0, 0)
+        self.body = QLabel("")
+        self.body.setObjectName("MsgBody")
+        self.body.setWordWrap(True)
+        self.body.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        hl.addWidget(self.body)
+        self.scroll.setWidget(host)
+        col.addWidget(self.scroll)
+
+    _BODY_W = 300     # wrap width (window is fixed at WIDTH); used to size the body
+    _BODY_CAP = 150   # tallest the body grows before it starts scrolling
+
+    def _fit_body(self) -> None:
+        h = self.body.heightForWidth(self._BODY_W)
+        if h < 0:
+            h = self.body.sizeHint().height()
+        self.scroll.setFixedHeight(max(18, min(self._BODY_CAP, h + 2)))
+
+    def set_message(self, role: str, text: str, accent: str,
+                    subcolor: str, thinking: bool = False) -> None:
+        icon_name = "user" if role == "user" else "audio-lines"
+        self.icon.setPixmap(lucide_pixmap(icon_name, color=accent, size=15))
+        self.name.setText("You" if role == "user" else "JARVIS")
+        self.name.setStyleSheet(f"color: {accent};")
         self.body.setText(text)
+        self.body.setVisible(bool(text))
+        self._fit_body()
+        self.dots.setVisible(thinking)
+        if thinking:
+            self.dots.set_color(subcolor)
+            self.dots.start()
+        else:
+            self.dots.stop()
+        # newest content at the top-left is already visible; reset scroll
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(0))
 
 
 class MiniBar(QWidget):
@@ -74,10 +162,15 @@ class MiniBar(QWidget):
     def __init__(self, controller) -> None:
         super().__init__()
         self.ctrl = controller
-        self._reply_msg: Message | None = None
-        self._reply_text = ""
 
-        # activity state (drives the strip animations)
+        # what to show in normal mode (one item at a time)
+        self._page = ""                 # "listen" | "message"
+        self._reply_text = ""
+        self._replying = False
+        self._awaiting_reply = False
+        self._keyboard = False
+
+        # activity flags
         self._live = False
         self._busy = False
         self._recording = False
@@ -96,8 +189,9 @@ class MiniBar(QWidget):
 
         self._build()
         self._apply_theme()
+        self._apply_input_mode()
         self._wire()
-        self._replay()
+        self._show_initial()
         theme_manager.changed.connect(self._apply_theme)
 
     # ------------------------------------------------------------------ UI
@@ -113,9 +207,9 @@ class MiniBar(QWidget):
 
         col = QVBoxLayout(self.card)
         col.setContentsMargins(14, 12, 14, 10)
-        col.setSpacing(8)
+        col.setSpacing(9)
 
-        # Header: title + window buttons
+        # Header: title + the three core surface controls (unchanged behaviour).
         head = QHBoxLayout()
         head.setSpacing(2)
         title = QLabel("JARVIS")
@@ -132,20 +226,24 @@ class MiniBar(QWidget):
             head.addWidget(b)
         col.addLayout(head)
 
-        # Controls: Live toggle + permission mode. Both are fixed-size so toggling
-        # the Live label ("Live" ⇆ "Live · on") can never reflow into the combo.
+        # Controls: Live · permission pill · keyboard chevron. All fixed-size so
+        # toggling any label can never reflow into a neighbour.
         ctrls = QHBoxLayout()
         ctrls.setSpacing(8)
         self.live_btn = QPushButton("  Live")
         self.live_btn.setObjectName("LiveToggle")
         self.live_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.live_btn.setToolTip("Live hands-free conversation on/off")
-        self.live_btn.setFixedSize(108, 30)
+        self.live_btn.setFixedSize(96, 30)
         self.live_btn.clicked.connect(self.ctrl.toggle_live)
         ctrls.addWidget(self.live_btn)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.setObjectName("ModeCombo")
+        self.mode_combo.setObjectName("ModePill")
+        self.mode_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_combo.setToolTip(
+            "Auto: run everything · Partial: ask before risky actions · "
+            "Manual: ask before anything but read-only")
         self.mode_combo.setFixedSize(104, 30)
         for label in ("Auto", "Partial", "Manual"):
             accent, _ = permission_accent(label.lower())
@@ -154,47 +252,33 @@ class MiniBar(QWidget):
         self.mode_combo.currentTextChanged.connect(
             lambda t: self.ctrl.set_permission_mode(t.lower()))
         ctrls.addWidget(self.mode_combo)
+
+        self.kbd_btn = IconButton("chevron-down", size=15, object_name="KbdToggle",
+                                  tooltip="Type instead of speak")
+        self.kbd_btn.setFixedSize(40, 30)
+        self.kbd_btn.clicked.connect(self._toggle_keyboard)
+        ctrls.addWidget(self.kbd_btn)
         ctrls.addStretch(1)
         col.addLayout(ctrls)
 
-        # Full-width transcript: you, then JARVIS — scrollable up to a cap, with
-        # the scrollbar hidden (the wheel still scrolls).
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setMinimumHeight(70)
-        self.scroll.setMaximumHeight(210)
-        host = QWidget()
-        host.setObjectName("Chat")
-        self.msg_lay = QVBoxLayout(host)
-        self.msg_lay.setContentsMargins(0, 0, 0, 0)
-        self.msg_lay.setSpacing(7)
-        self.msg_lay.addStretch()
-        self.scroll.setWidget(host)
-        col.addWidget(self.scroll)
+        # Content: exactly one of these is shown at a time.
+        self.listen_panel = ListenPanel(on_stop=self.ctrl.toggle_live)
+        self.msg_panel = MessagePanel()
+        self.listen_panel.hide()
+        self.msg_panel.hide()
+        col.addWidget(self.listen_panel)
+        col.addWidget(self.msg_panel)
 
-        # Activity strip: an equalizer for live/speaking, dots for thinking.
-        act = QHBoxLayout()
-        act.setSpacing(7)
-        self.bars = WaveBars()
-        self.bars.hide()
-        self.dots = TypingDots()
-        self.dots.hide()
-        self.activity_label = QLabel("Ready")
-        self.activity_label.setObjectName("ActivityText")
-        act.addWidget(self.bars)
-        act.addWidget(self.dots)
-        act.addWidget(self.activity_label)
-        act.addStretch(1)
-        col.addLayout(act)
-
-        # Input with inline mic + send (kept compact).
+        # Input: voice or keyboard, with an inline mic + round send.
         self.input = QLineEdit()
         self.input.setObjectName("Input")
-        self.input.setPlaceholderText("Ask JARVIS…")
         self.input.returnPressed.connect(self._send)
         self.input.installEventFilter(self)
+
+        self.kbd_hint = QLabel()
+        self.kbd_hint.setObjectName("KbdHint")
+        self.kbd_hint.hide()
+
         self.mic = MicButton("MicMini", icon_px=16, idle_icon="mic", active_icon="square")
         self.mic.setToolTip("Record one message")
         self.mic.clicked.connect(self.ctrl.toggle_record)
@@ -204,6 +288,7 @@ class MiniBar(QWidget):
         wrap = QHBoxLayout(self.input_wrap)
         wrap.setContentsMargins(4, 3, 6, 3)
         wrap.setSpacing(2)
+        wrap.addWidget(self.kbd_hint)
         wrap.addWidget(self.input, 1)
         wrap.addWidget(self.mic)
 
@@ -221,10 +306,9 @@ class MiniBar(QWidget):
     def _accent(self) -> tuple[str, str]:
         return permission_accent(self.ctrl.permission_mode)
 
-    # Slim the input for the flyout (smaller than the full orb's).
     _COMPACT = (
         "#InputWrap { border-radius: 17px; }"
-        "#Input { padding: 4px 4px 4px 12px; font-size: 12px; }"
+        "#Input { padding: 4px 4px 4px 10px; font-size: 12px; }"
     )
 
     def _apply_theme(self) -> None:
@@ -232,14 +316,25 @@ class MiniBar(QWidget):
         a, a2 = self._accent()
         self.setStyleSheet(glass_qss(pal, accent=a, accent2=a2) + self._COMPACT)
         self.mic.set_idle_color(pal.subtext)
-        self.bars.set_color(a)
-        self.dots.set_color(pal.subtext)
+        self.listen_panel.bars.set_color(a)
         self._render_live()
+        self._render_kbd()
+        self.kbd_hint.setPixmap(lucide_pixmap("keyboard", color=pal.subtext, size=15))
 
     def _render_live(self) -> None:
         on = self.live_btn.property("live") == "true"
-        color = "#ffffff" if on else theme_manager.palette().subtext
+        a, _ = self._accent()
+        color = a if on else theme_manager.palette().subtext
         self.live_btn.setIcon(lucide_icon("audio-lines", color=color, size=14))
+
+    def _render_kbd(self) -> None:
+        a, _ = self._accent()
+        pal = theme_manager.palette()
+        name = "keyboard" if self._keyboard else "chevron-down"
+        color = a if self._keyboard else pal.subtext
+        self.kbd_btn.set_colors(color, a)
+        self.kbd_btn._name = name           # swap glyph
+        self.kbd_btn._render(color)
 
     # ---------------------------------------------------------------- wire
     def _wire(self) -> None:
@@ -249,112 +344,133 @@ class MiniBar(QWidget):
         c.recording_changed.connect(self._on_recording)
         c.listening_changed.connect(self._set_live)
         c.permission_mode_changed.connect(self._on_mode)
-        c.user_said.connect(lambda t: self._add_message("user", t))
+        c.user_said.connect(self._on_user_said)
         c.reply_started.connect(self._on_reply_started)
         c.reply_chunk.connect(self._on_reply_chunk)
         c.reply_finished.connect(self._on_reply_finished)
         c.error_occurred.connect(self._on_error)
 
-    # ------------------------------------------------------- transcript
-    def _add_message(self, role: str, text: str) -> Message:
-        msg = Message(role, text)
-        self.msg_lay.insertWidget(self.msg_lay.count() - 1, msg)
-        self._trim()
-        self._scroll_to_bottom()
-        return msg
+    # ------------------------------------------------------- input mode
+    def _toggle_keyboard(self) -> None:
+        self._keyboard = not self._keyboard
+        self._apply_input_mode()
 
-    def _trim(self) -> None:
-        # Keep the last MAX_MESSAGES rows (index count-1 is the trailing stretch).
-        while self.msg_lay.count() - 1 > MAX_MESSAGES:
-            item = self.msg_lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+    def _apply_input_mode(self) -> None:
+        self.input.setPlaceholderText("Type to JARVIS…" if self._keyboard else "Ask JARVIS…")
+        self.kbd_hint.setVisible(self._keyboard)
+        self.kbd_btn.setProperty("active", "true" if self._keyboard else "false")
+        self.kbd_btn.style().unpolish(self.kbd_btn)
+        self.kbd_btn.style().polish(self.kbd_btn)
+        self._render_kbd()
+        if self._keyboard:
+            self.input.setFocus()
 
-    def _scroll_to_bottom(self) -> None:
-        bar = self.scroll.verticalScrollBar()
-        # Defer one tick so the freshly-added row is laid out before we scroll.
-        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+    # ------------------------------------------------------- current item
+    def _set_page(self, page: str) -> None:
+        if page == self._page:
+            return
+        self._page = page
+        self.listen_panel.setVisible(page == "listen")
+        self.msg_panel.setVisible(page == "message")
+        self._reposition()
 
-    def _replay(self) -> None:
-        for turn in self.ctrl.history[-6:]:
+    def _show_message(self, role: str, text: str, thinking: bool = False) -> None:
+        a, _ = self._accent()
+        sub = theme_manager.palette().subtext
+        self.msg_panel.set_message(role, text, accent=a, subcolor=sub, thinking=thinking)
+        self._set_page("message")
+
+    def _show_listen(self) -> None:
+        self.listen_panel.set_speaking(self._recording or self._hearing)
+        self._set_page("listen")
+
+    def _show_initial(self) -> None:
+        last = None
+        for turn in reversed(self.ctrl.history):
             if turn.get("role") in ("user", "assistant"):
-                self._add_message(turn["role"], turn.get("content", ""))
+                last = turn
+                break
+        if last is not None:
+            role = "user" if last["role"] == "user" else "assistant"
+            self._show_message(role, last.get("content", ""))
+        else:
+            self._show_message("assistant", "Hi — ask me anything, or tap Live to talk.")
+
+    # ------------------------------------------------ controller signals
+    def _on_user_said(self, text: str) -> None:
+        # Show your command (state 3) for a beat, then hand off to the thinking
+        # animation (state 4) if JARVIS hasn't started replying yet.
+        self._replying = False
+        self._reply_text = ""
+        self._awaiting_reply = True
+        self._show_message("user", text)
+        QTimer.singleShot(700, self._maybe_thinking)
+
+    def _maybe_thinking(self) -> None:
+        if self._awaiting_reply and not self._reply_text and not self._replying:
+            self._show_message("assistant", "", thinking=True)
 
     def _on_reply_started(self) -> None:
         self._reply_text = ""
-        self._reply_msg = self._add_message("assistant", "")
+        self._replying = True
+        self._show_message("assistant", "", thinking=True)
 
     def _on_reply_chunk(self, delta: str) -> None:
         self._reply_text += delta
-        if self._reply_msg is None:
-            self._reply_msg = self._add_message("assistant", "")
-        self._reply_msg.set_text(self._reply_text)
-        self._scroll_to_bottom()
+        self._show_message("assistant", self._reply_text, thinking=False)
 
     def _on_reply_finished(self, text: str) -> None:
-        if self._reply_msg is None:
-            self._reply_msg = self._add_message("assistant", "")
-        self._reply_msg.set_text(text or "…")
-        self._reply_msg = None
-        self._reply_text = ""
-        self._scroll_to_bottom()
+        self._replying = False
+        self._awaiting_reply = False
+        self._show_message("assistant", text or "…", thinking=False)
 
     def _on_error(self, message: str) -> None:
+        self._replying = False
+        self._awaiting_reply = False
         uri = lucide_data_uri("alert-triangle", color="#ff8791", size=12)
-        self._reply_msg = None
-        self._add_message("assistant",
-                          f'<img src="{uri}" width="12" height="12">&nbsp; {message}')
+        self._show_message("assistant",
+                           f'<img src="{uri}" width="12" height="12">&nbsp; {message}')
 
-    # ------------------------------------------------------- activity state
     def _on_status(self, text: str) -> None:
         self._status_text = text or ""
         low = self._status_text.lower()
         self._hearing = "hear" in low
         self._tts = "speak" in low
-        self._refresh_activity()
+        self._refresh_view()
 
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
         self.input.setEnabled(not busy)
-        self._refresh_activity()
+        self._refresh_view()
 
     def _on_recording(self, on: bool) -> None:
         self._recording = on
         self.mic.set_recording(on)
-        self._refresh_activity()
+        self._refresh_view()
 
     def _set_live(self, on: bool) -> None:
         self._live = on
         self.live_btn.setProperty("live", "true" if on else "false")
-        self.live_btn.setText("  Live · on" if on else "  Live")
         self.live_btn.style().unpolish(self.live_btn)
         self.live_btn.style().polish(self.live_btn)
         self._render_live()
-        self._refresh_activity()
+        self._refresh_view()
 
-    def _refresh_activity(self) -> None:
-        """Pick the one indicator that matches what JARVIS is doing right now."""
-        user_speaking = self._recording or self._hearing
-        if user_speaking:
-            bars, dots, label = "active", False, "Listening to you…"
-        elif self._busy:
-            bars, dots, label = "off", True, (self._status_text or "Thinking…")
-        elif self._tts:
-            bars, dots, label = "active", False, "Speaking…"
-        elif self._live:
-            bars, dots, label = "calm", False, "Live · listening"
-        else:
-            bars, dots, label = "off", False, (self._status_text or "Ready")
-
-        self.bars.set_mode(bars)
-        self.bars.setVisible(bars != "off")
-        self.dots.setVisible(dots)
-        if dots:
-            self.dots.start()
-        else:
-            self.dots.stop()
-        self.activity_label.setText(label)
+    def _refresh_view(self) -> None:
+        """Pick the single item to show now. Explicit message events (you / reply)
+        drive the message panel; this handles the listening panel and idle."""
+        # Actively capturing your voice → the listening panel.
+        if self._recording or self._hearing:
+            self._show_listen()
+            return
+        # Live and quietly waiting (not mid-reply) → the listening panel.
+        if (self._live and not self._busy and not self._tts and not self._awaiting_reply
+                and "listen" in self._status_text.lower()):
+            self._show_listen()
+            return
+        # Otherwise leave whatever message is already shown (or seed one).
+        if self._page == "":
+            self._show_initial()
 
     def _on_mode(self, mode: str) -> None:
         want = mode.capitalize()
@@ -382,22 +498,40 @@ class MiniBar(QWidget):
 
     # -------------------------------------------------------------- show
     def hideEvent(self, event) -> None:  # noqa: ANN001
-        # Park animations while the flyout isn't visible.
-        self.bars.set_mode("off")
-        self.dots.stop()
+        self.listen_panel.bars.set_mode("off")
+        self.msg_panel.dots.stop()
         super().hideEvent(event)
 
     def showEvent(self, event) -> None:  # noqa: ANN001
         super().showEvent(event)
-        self._refresh_activity()
+        self._refresh_view()
+
+    def _fit(self) -> None:
+        """Resize to the current content. adjustSize() misbehaves on this frameless
+        Tool window (it can grow instead of shrink), so drive it explicitly."""
+        self.card.layout().activate()
+        self.layout().activate()
+        self.resize(self.sizeHint())
+
+    def _reposition(self) -> None:
+        """Keep the flyout anchored above the tray as its height changes."""
+        if not self.isVisible():
+            return
+        self._fit()
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move(screen.right() - self.width() - MARGIN,
+                  screen.bottom() - self.height() - MARGIN)
 
     def show_above_tray(self) -> None:
         """Dock the flyout at the bottom-right, just above the taskbar tray."""
+        self._fit()
         screen = QApplication.primaryScreen().availableGeometry()
-        self.adjustSize()
         self.move(screen.right() - self.width() - MARGIN,
                   screen.bottom() - self.height() - MARGIN)
         self.show()
         self.raise_()
         self.activateWindow()
-        self.input.setFocus()
+        if self._keyboard:
+            self.input.setFocus()
+        else:
+            self.input.clearFocus()

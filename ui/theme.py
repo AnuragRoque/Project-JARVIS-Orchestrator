@@ -152,20 +152,22 @@ _GLASS = Template("""
 
 QScrollArea, #Chat { background: transparent; border: none; }
 
-/* Full-width conversation rows (compact quick-bar): a small role caption over
-   a word-wrapped body; user rows carry the accent, JARVIS rows a faint panel. */
-#MsgUser {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 $accent2, stop:1 $accent);
-    border: none; border-radius: 13px;
+/* Compact quick-bar: one item at a time. The listening panel and the single
+   You/JARVIS message share these. Role name takes the accent; body is plain. */
+#ListenTitle { color: $accent; font-size: 14px; font-weight: 700; }
+#ListenSub   { color: $sub;  font-size: 11px; }
+#RoleName    { color: $accent; font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+#MsgBody     { color: $text; font-size: 13px; }
+#MsgHint     { color: $sub;  font-size: 12px; }
+#KbdHint     { padding-left: 4px; }
+
+/* Big round stop button that ends live listening (mirrors #Send). */
+#StopBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff5d6c, stop:1 #d21f3c);
+    border: none; border-radius: 19px;
+    min-width: 38px; max-width: 38px; min-height: 38px; max-height: 38px;
 }
-#MsgAssistant {
-    background: $bub_ass; border: 1px solid $bub_ass_bd; border-radius: 13px;
-}
-#MsgRole { color: $sub; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
-#MsgBody { color: $text; font-size: 12px; }
-#MsgRoleUser { color: rgba(255,255,255,0.75); font-size: 9px; font-weight: 800; letter-spacing: 1px; }
-#MsgBodyUser { color: #ffffff; font-size: 12px; font-weight: 600; }
-#ActivityText { color: $sub; font-size: 11px; }
+#StopBtn:hover { background: #ff5d6c; }
 
 #Bubble_user, #Bubble_assistant, #Bubble_system {
     border-radius: 14px; padding: 10px 13px; font-size: 13px;
@@ -234,16 +236,30 @@ QScrollArea, #Chat { background: transparent; border: none; }
     font-size: 13px; color: $text;
 }
 
+/* Pill toggles in the control row. Live and the mode pill keep a stable size so
+   toggling them never reflows into a neighbour. The active tint is the accent. */
 #LiveToggle {
-    background: $surface; border: 1px solid $border; border-radius: 14px;
-    padding: 5px 12px; color: $text; font-size: 11px; font-weight: 600;
+    background: $surface; border: 1px solid $border; border-radius: 15px;
+    padding: 4px 12px; color: $sub; font-size: 12px; font-weight: 600; text-align: left;
 }
 #LiveToggle:hover { border: 1px solid $accent; }
 #LiveToggle[live="true"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 $accent, stop:1 $accent2);
-    color: #ffffff; border: none;
+    background: $accent_soft; color: $accent; border: 1px solid $accent;
 }
 
+#ModePill {
+    background: $surface; border: 1px solid $border; border-radius: 15px;
+    padding: 4px 12px; color: $text; font-size: 12px; font-weight: 600;
+}
+#ModePill:hover { border: 1px solid $accent; }
+#ModePill::drop-down { width: 0; border: none; }   /* the ▼ lives in KbdToggle now */
+#ModePill QAbstractItemView {
+    background: $panel; border: 1px solid $border;
+    selection-background-color: $accent_soft; color: $text; outline: none;
+    border-radius: 8px; padding: 4px;
+}
+
+/* The chat view (orb / full window) keeps its own combo with a visible arrow. */
 #ModeCombo {
     background: $surface; border: 1px solid $border; border-radius: 12px;
     padding: 3px 10px; color: $text; font-size: 11px; font-weight: 600;
@@ -256,6 +272,13 @@ QScrollArea, #Chat { background: transparent; border: none; }
     selection-background-color: $accent_soft; color: $text; outline: none;
     border-radius: 8px; padding: 4px;
 }
+
+/* The chevron button after the mode pill: switch the input field to keyboard. */
+#KbdToggle {
+    background: $surface; border: 1px solid $border; border-radius: 15px;
+}
+#KbdToggle:hover { border: 1px solid $accent; }
+#KbdToggle[active="true"] { background: $accent_soft; border: 1px solid $accent; }
 
 QScrollBar:vertical { background: transparent; width: 8px; margin: 4px; }
 QScrollBar::handle:vertical { background: $surface_hi; border-radius: 4px; min-height: 30px; }

@@ -88,6 +88,17 @@ _ICONS: dict[str, str] = {
         '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/>'
         '<path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'
     ),
+    # person — the "You" role marker
+    "user": (
+        '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>'
+        '<circle cx="12" cy="7" r="4"/>'
+    ),
+    # keyboard — the "type instead" input toggle
+    "keyboard": (
+        '<rect width="20" height="16" x="2" y="4" rx="2"/>'
+        '<path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/>'
+        '<path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M7 16h10"/>'
+    ),
 }
 
 _SVG = (
