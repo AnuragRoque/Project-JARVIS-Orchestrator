@@ -358,9 +358,23 @@ class MainWindow(QMainWindow):
             "Resume tracking" if paused else "Pause tracking")
 
     def _periodic_refresh(self) -> None:
+        # Don't churn the DB or rebuild the (potentially hundreds of) result
+        # widgets while we're off screen — another tab is showing, or the whole
+        # window is hidden to the tray. Running this blind was hitching the GUI
+        # thread every 5s and made tab switching feel frozen.
+        if not self.isVisible():
+            return
         self._update_status()
         if self.current_section in ("today", "timeline"):
-            self._load_section(self.current_section)
+            # Only rebuild the list when the underlying data actually changed;
+            # otherwise the live view tears down and recreates every row on every
+            # tick, which is the expensive part.
+            counts = self.repo.counts()
+            sig = (counts.get("sessions"), counts.get("browser_visits"),
+                   counts.get("file_events"))
+            if sig != getattr(self, "_last_counts_sig", None):
+                self._last_counts_sig = sig
+                self._load_section(self.current_section)
 
     # -------------------------------------------------------------- settings
     def _on_settings_changed(self) -> None:
