@@ -367,22 +367,21 @@ class MiniBar(QWidget):
 
     # ------------------------------------------------------- current item
     def _set_page(self, page: str) -> None:
-        if page == self._page:
-            return
         self._page = page
         self.listen_panel.setVisible(page == "listen")
         self.msg_panel.setVisible(page == "message")
-        self._reposition()
 
     def _show_message(self, role: str, text: str, thinking: bool = False) -> None:
         a, _ = self._accent()
         sub = theme_manager.palette().subtext
         self.msg_panel.set_message(role, text, accent=a, subcolor=sub, thinking=thinking)
         self._set_page("message")
+        self._relayout()
 
     def _show_listen(self) -> None:
         self.listen_panel.set_speaking(self._recording or self._hearing)
         self._set_page("listen")
+        self._relayout()
 
     def _show_initial(self) -> None:
         last = None
@@ -507,17 +506,30 @@ class MiniBar(QWidget):
         self._refresh_view()
 
     def _fit(self) -> None:
-        """Resize to the current content. adjustSize() misbehaves on this frameless
-        Tool window (it can grow instead of shrink), so drive it explicitly."""
-        self.card.layout().activate()
-        self.layout().activate()
-        self.resize(self.sizeHint())
+        """Resize height to the current content. We size from the *card* directly:
+        the card's drop-shadow effect breaks size-hint propagation to the window,
+        so ``self.sizeHint()`` under-reports and ``adjustSize()`` misbehaves. The
+        inner layouts are invalidated first so the card hint is fresh *now* rather
+        than after the next event loop (a resize-fixed child only posts its layout
+        request; without this the flyout would lag a frame behind long replies)."""
+        for w in (self.msg_panel, self.listen_panel, self.card):
+            lay = w.layout()
+            if lay is not None:
+                lay.invalidate()
+                lay.activate()
+        m = self.layout().contentsMargins()
+        h = self.card.sizeHint().height() + m.top() + m.bottom()
+        # setFixedHeight (not resize): the graphics effect also corrupts the
+        # window's minimumSizeHint, which would otherwise clamp a shrink.
+        self.setFixedHeight(h)
 
-    def _reposition(self) -> None:
-        """Keep the flyout anchored above the tray as its height changes."""
+    def _relayout(self) -> None:
+        """Fit to the current content and keep the BOTTOM edge pinned above the
+        tray, so a long reply grows the flyout upward instead of pushing its
+        input off the bottom of the screen."""
+        self._fit()
         if not self.isVisible():
             return
-        self._fit()
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.right() - self.width() - MARGIN,
                   screen.bottom() - self.height() - MARGIN)
