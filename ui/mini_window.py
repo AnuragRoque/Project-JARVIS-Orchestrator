@@ -168,6 +168,7 @@ class MiniBar(QWidget):
         self._reply_text = ""
         self._replying = False
         self._awaiting_reply = False
+        self._showing_reply = False     # keep a reply on screen (don't snap to listen)
         self._keyboard = False
 
         # activity flags
@@ -296,11 +297,15 @@ class MiniBar(QWidget):
                           size=18, object_name="Send", tooltip="Send")
         send.clicked.connect(self._send)
 
-        row = QHBoxLayout()
+        # The whole input row only appears in keyboard mode — voice mode talks
+        # via Live, and hiding it frees the room to read JARVIS's reply.
+        self.input_row = QWidget()
+        row = QHBoxLayout(self.input_row)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         row.addWidget(self.input_wrap, 1)
         row.addWidget(send)
-        col.addLayout(row)
+        col.addWidget(self.input_row)
 
     # --------------------------------------------------------------- theme
     def _accent(self) -> tuple[str, str]:
@@ -356,12 +361,16 @@ class MiniBar(QWidget):
         self._apply_input_mode()
 
     def _apply_input_mode(self) -> None:
-        self.input.setPlaceholderText("Type to JARVIS…" if self._keyboard else "Ask JARVIS…")
+        # Voice mode hides the whole typing row (talk via Live); keyboard mode
+        # shows it and the flyout grows upward to make room.
+        self.input.setPlaceholderText("Type to JARVIS…")
         self.kbd_hint.setVisible(self._keyboard)
+        self.input_row.setVisible(self._keyboard)
         self.kbd_btn.setProperty("active", "true" if self._keyboard else "false")
         self.kbd_btn.style().unpolish(self.kbd_btn)
         self.kbd_btn.style().polish(self.kbd_btn)
         self._render_kbd()
+        self._relayout()
         if self._keyboard:
             self.input.setFocus()
 
@@ -402,6 +411,7 @@ class MiniBar(QWidget):
         self._replying = False
         self._reply_text = ""
         self._awaiting_reply = True
+        self._showing_reply = False
         self._show_message("user", text)
         QTimer.singleShot(700, self._maybe_thinking)
 
@@ -421,6 +431,7 @@ class MiniBar(QWidget):
     def _on_reply_finished(self, text: str) -> None:
         self._replying = False
         self._awaiting_reply = False
+        self._showing_reply = True   # keep it up (in Live, don't snap back to listen)
         self._show_message("assistant", text or "…", thinking=False)
 
     def _on_error(self, message: str) -> None:
@@ -435,6 +446,8 @@ class MiniBar(QWidget):
         low = self._status_text.lower()
         self._hearing = "hear" in low
         self._tts = "speak" in low
+        if self._hearing:                 # you're speaking again → release the reply
+            self._showing_reply = False
         self._refresh_view()
 
     def _on_busy(self, busy: bool) -> None:
@@ -445,6 +458,8 @@ class MiniBar(QWidget):
     def _on_recording(self, on: bool) -> None:
         self._recording = on
         self.mic.set_recording(on)
+        if on:                            # started talking → release the reply
+            self._showing_reply = False
         self._refresh_view()
 
     def _set_live(self, on: bool) -> None:
@@ -462,9 +477,10 @@ class MiniBar(QWidget):
         if self._recording or self._hearing:
             self._show_listen()
             return
-        # Live and quietly waiting (not mid-reply) → the listening panel.
+        # Live and quietly waiting (not mid-reply, not still reading a reply) →
+        # the listening panel. A finished reply stays up until you speak again.
         if (self._live and not self._busy and not self._tts and not self._awaiting_reply
-                and "listen" in self._status_text.lower()):
+                and not self._showing_reply and "listen" in self._status_text.lower()):
             self._show_listen()
             return
         # Otherwise leave whatever message is already shown (or seed one).
