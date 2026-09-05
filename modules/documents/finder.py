@@ -8,6 +8,7 @@ opened before.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -59,13 +60,34 @@ def _known_folder(name: str) -> Path | None:
     return None
 
 
+def _expand(folder: str) -> str:
+    """Expand ~, %VAR%, and PowerShell-style $env:VAR / $VAR in a path hint.
+
+    The model often passes '%temp%' or 'C:\\Users\\$env:USERNAME\\...' literally;
+    without this they never resolve and the search returns nothing.
+    """
+    s = folder.strip().strip('"').strip("'")
+    # $env:NAME and ${env:NAME} -> %NAME% so os.path.expandvars handles it.
+    s = re.sub(r"\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?", r"%\1%", s)
+    # bare $NAME (rarer) -> %NAME%
+    s = re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", r"%\1%", s)
+    return os.path.expandvars(os.path.expanduser(s))
+
+
 def resolve_roots(folder: str | None) -> list[Path]:
     """Turn a folder hint ('downloads', a path, or None) into existing roots."""
     if folder:
         key = folder.strip().lower()
         if key in _FOLDERID:
             return _folder_paths(key)
-        p = Path(os.path.expanduser(folder))
+        # Common named locations the shell GUIDs don't cover.
+        if key in ("temp", "%temp%", "tmp"):
+            tmp = os.environ.get("TEMP") or os.environ.get("TMP")
+            return [Path(tmp)] if tmp and os.path.isdir(tmp) else []
+        if key in ("appdata", "%appdata%"):
+            ad = os.environ.get("APPDATA")
+            return [Path(ad)] if ad and os.path.isdir(ad) else []
+        p = Path(_expand(folder))
         return [p] if p.exists() else []
     roots: list[Path] = []
     for name in _DEFAULT_ROOTS:
