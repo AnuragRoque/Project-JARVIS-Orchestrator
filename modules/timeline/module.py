@@ -83,6 +83,28 @@ LIST_RECENT_FILES_SPEC = {
     },
 }
 
+ACTIVITY_SUMMARY_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "activity_summary",
+        "description": (
+            "Summarise how the user spent time on this PC over a period: total "
+            "active time (hours), which apps/sites they used most, and when they "
+            "started/stopped. Use this for 'how many hours did I work/use the "
+            "laptop', 'how long was I on VS Code', 'what did I do yesterday', "
+            "'how productive was I today'. Computed from the activity timeline."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": _since_desc()},
+                "query": {"type": "string", "description":
+                          "Optional: focus on one app/site, e.g. 'vs code', 'chrome'."},
+            },
+        },
+    },
+}
+
 BROWSER_RECALL_SPEC = {
     "type": "function",
     "function": {
@@ -126,14 +148,65 @@ class TimelineModule(Module):
             Tool(RECALL_OPEN_SPEC, self.recall_open, "safe_action"),
             Tool(LIST_RECENT_FILES_SPEC, self.list_recent_files, "read_only"),
             Tool(BROWSER_RECALL_SPEC, self.browser_recall, "read_only"),
+            Tool(ACTIVITY_SUMMARY_SPEC, self.activity_summary, "read_only"),
         ]
 
     # ----------------------------------------------------------- handlers
     def recall_search(self, query: str = "", since: str | None = None,
                       kind: str | None = None, limit: int = 15) -> dict:
-        results = self.search.search(query) if (query or "").strip() else []
+        if (query or "").strip():
+            results = self.search.search(query)
+        else:
+            # No keyword ('recall yesterday', 'what did I do today') — fall back to
+            # recent activity in the window rather than returning nothing.
+            results = self._recent_all(kind)
         results = self._filter(results, since=since, kind=kind)
-        return self._cache_and_format(results[:_lim(limit)], query=query)
+        return self._cache_and_format(results[:_lim(limit)], query=query or "recent activity")
+
+    def _recent_all(self, kind: str | None) -> list[dict]:
+        """Recent items across the timeline (no text query), for broad recalls."""
+        out: list[dict] = []
+        if kind in (None, "session"):
+            out += self.repo.recent_sessions(limit=300)
+        if kind in (None, "browser"):
+            out += self.repo.recent_browser_visits(limit=200)
+        if kind in (None, "file"):
+            out += self.repo.recent_files(limit=200)
+        return out
+
+    def activity_summary(self, since: str | None = None,
+                         query: str = "") -> dict:
+        """Aggregate active time + top apps for a window (answers 'how many hours')."""
+        cutoff = _parse_since(since)
+        sessions = self.repo.recent_sessions(since=cutoff, limit=5000)
+        terms = [t for t in (query or "").lower().split() if t]
+        if terms:
+            def _hit(s: dict) -> bool:
+                hay = f"{s.get('app','')} {s.get('title','')} {s.get('process_name','')}".lower()
+                return all(t in hay for t in terms)
+            sessions = [s for s in sessions if _hit(s)]
+        if not sessions:
+            return {"since": since or "all time", "sessions": 0,
+                    "note": ("No activity was recorded for that period. This means "
+                             "the timeline has no data for it — say so plainly; do "
+                             "NOT claim an amount of time.")}
+        total = sum(float(s.get("duration_seconds") or 0.0) for s in sessions)
+        per_app: dict[str, float] = {}
+        for s in sessions:
+            app = s.get("app") or s.get("process_name") or "unknown"
+            per_app[app] = per_app.get(app, 0.0) + float(s.get("duration_seconds") or 0.0)
+        top = sorted(per_app.items(), key=lambda kv: kv[1], reverse=True)[:6]
+        starts = [s.get("start_time") for s in sessions if s.get("start_time")]
+        ends = [s.get("end_time") for s in sessions if s.get("end_time")]
+        return {
+            "since": since or "all time",
+            "sessions": len(sessions),
+            "active_time": _dur(total),
+            "active_hours": round(total / 3600.0, 2),
+            "first_active": _when(min(starts)) if starts else "",
+            "last_active": _when(max(ends)) if ends else "",
+            "top_apps": [{"app": a, "time": _dur(sec)} for a, sec in top],
+        }
 
     def browser_recall(self, query: str = "", since: str | None = None,
                        limit: int = 15) -> dict:
@@ -217,6 +290,18 @@ def _lim(limit) -> int:
         return max(1, min(int(limit), 50))
     except (TypeError, ValueError):
         return 15
+
+
+def _dur(seconds: float) -> str:
+    """Human duration: '3h 12m', '45m', '30s'."""
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m" if m else f"{h}h"
+    if m:
+        return f"{m}m"
+    return f"{s}s"
 
 
 def _detail(r: dict) -> str:

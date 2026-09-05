@@ -126,6 +126,7 @@ class Orchestrator(QThread):
     @staticmethod
     def _extract_calls(message: dict) -> list[tuple[str, str, dict]]:
         calls: list[tuple[str, str, dict]] = []
+        seen: set[str] = set()
         for i, call in enumerate(message.get("tool_calls") or []):
             fn = call.get("function", {}) or {}
             name = fn.get("name")
@@ -137,8 +138,22 @@ class Orchestrator(QThread):
                     args = json.loads(args) if args.strip() else {}
                 except json.JSONDecodeError:
                     args = {}
+            args = args if isinstance(args, dict) else {}
+            # De-duplicate identical calls the model emits in the SAME message.
+            # Models sometimes repeat one call N times (observed: shut down ×5,
+            # set_reminder ×5) — running each would fire the action N times. One
+            # request should perform one action, so collapse exact duplicates.
+            try:
+                fingerprint = name + "\0" + json.dumps(args, sort_keys=True,
+                                                       default=str)
+            except (TypeError, ValueError):
+                fingerprint = name + "\0" + str(args)
+            if fingerprint in seen:
+                log.info("Dropping duplicate tool call %s in one turn", name)
+                continue
+            seen.add(fingerprint)
             call_id = call.get("id") or f"call_{i}"
-            calls.append((call_id, name, args if isinstance(args, dict) else {}))
+            calls.append((call_id, name, args))
         return calls
 
 
