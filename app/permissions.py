@@ -14,6 +14,7 @@ the event log.
 """
 from __future__ import annotations
 
+import re
 import threading
 from typing import Callable
 
@@ -39,6 +40,38 @@ _RISK_MAP: dict[str, tuple[RiskLevel, RiskCategory]] = {
 
 # confirm(summary, reason, risk_level, category) -> bool
 ConfirmFn = Callable[[str, str, RiskLevel, RiskCategory], bool]
+
+# --- Self-preservation --------------------------------------------------------
+# JARVIS runs as a python/pythonw process. A command that kills python, pythonw,
+# or a "jarvis" process (or an unfiltered mass process-kill) would terminate the
+# assistant itself — never the user's intent, and it silently ends the session.
+# These are hard-blocked regardless of permission mode (even AUTO).
+_SELF_KILL_PATTERNS = [
+    # Stop-Process / taskkill / kill naming python / pythonw / jarvis
+    re.compile(r"(stop-process|taskkill|\bkill\b|pkill)\b[^\n|]*"
+               r"(python|pythonw|jarvis)", re.IGNORECASE),
+    re.compile(r"(python|pythonw|jarvis)[^\n]*?(stop-process|taskkill|\bkill\b)",
+               re.IGNORECASE),
+    # Unfiltered mass kill: every process piped straight into Stop-Process would
+    # include JARVIS itself (e.g. `Get-Process | Stop-Process`).
+    re.compile(r"get-process\s*(\|\s*(where[-\w]*\s*\{[^}]*mainwindow[^}]*\}\s*"
+               r"\|\s*)?(foreach[-\w]*\s*\{[^}]*)?)?\s*(\|\s*)?stop-process",
+               re.IGNORECASE),
+]
+
+
+def _would_kill_self(name: str, args: dict) -> bool:
+    """True if this call would terminate the JARVIS process itself."""
+    text = ""
+    if name == "run_powershell":
+        text = str((args or {}).get("command", ""))
+    elif name == "run_python":
+        text = str((args or {}).get("code", ""))
+    else:
+        return False
+    if not text.strip():
+        return False
+    return any(p.search(text) for p in _SELF_KILL_PATTERNS)
 
 
 class PermissionCoordinator:
@@ -69,6 +102,13 @@ class PermissionCoordinator:
     def gate(self, name: str, args: dict, risk: str) -> tuple[bool, str]:
         """Decide whether a tool call may run. Blocks for a confirm if needed."""
         mode = self._mode
+        # Hard floor: never let JARVIS kill its own process, in any mode.
+        if _would_kill_self(name, args):
+            self._log(name, _summarise(name, args), RiskLevel.CRITICAL,
+                      "self-termination", "blocked(self-kill)", _detail(args))
+            return False, ("That command would terminate JARVIS itself, so I "
+                           "blocked it. Tell the user to close the specific other "
+                           "app instead — name the exact process, not python/jarvis.")
         if name == "run_powershell":
             command = (args or {}).get("command", "")
             decision = self._policy.evaluate(command, mode)
