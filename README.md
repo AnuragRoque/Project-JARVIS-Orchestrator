@@ -33,17 +33,17 @@ activity engine already working end-to-end (Phases 0–3 done).
 
 ### Read the docs in this order
 
-| Doc | What it covers |
-|-----|----------------|
-| **[README.md](README.md)** (this file) | The vision, the merged shape, how to run, the tech decisions |
-| **[docs/ANALYSIS.md](docs/ANALYSIS.md)** | What each existing module is, what we keep / port / drop, and why |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Target folder structure, the orchestrator, permissions, the data layer |
-| **[docs/MODULE_CONTRACT.md](docs/MODULE_CONTRACT.md)** | The plugin interface that makes every module independently upgradable |
-| **[docs/ROADMAP.md](docs/ROADMAP.md)** | The phased build plan with acceptance criteria for each phase |
+| Doc                                                         | What it covers                                                         |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **[README.md](README.md)** (this file)                 | The vision, the merged shape, how to run, the tech decisions           |
+| **[docs/ANALYSIS.md](docs/ANALYSIS.md)**               | What each existing module is, what we keep / port / drop, and why      |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**       | Target folder structure, the orchestrator, permissions, the data layer |
+| **[docs/MODULE_CONTRACT.md](docs/MODULE_CONTRACT.md)** | The plugin interface that makes every module independently upgradable  |
+| **[docs/ROADMAP.md](docs/ROADMAP.md)**                 | The phased build plan with acceptance criteria for each phase          |
 
 ---
 
-## The product in one picture
+## The product in one picture 
 
 ```
                         ┌───────────────────────────────────────────────┐
@@ -83,16 +83,16 @@ activity engine already working end-to-end (Phases 0–3 done).
 
 ## What you'll be able to say
 
-| You say… | What happens |
-|----------|--------------|
-| "Jarvis, what's Apple?" | Plain answer, spoken back. No tools. |
-| "Sleep my PC in 10 seconds." | Orchestrator → terminal tool; in Manual mode it confirms first ("Sir, confirm sleep in 10s?"). |
-| "List the documents I opened in the last 2 days about the company JD." | Timeline recall → returns the matches → "I found 6, which should I open?" |
-| "Open that one." / "Open the third." | Resource reopener launches the file / URL / switches to the window. |
-| "I was watching *Lantern* on Hotstar — open it." | Browser recall searches visit history newest→oldest, finds the Hotstar tab, reopens the URL. |
-| "Remind me to call the recruiter at 6pm." | Reminders module parses the time, schedules it, and fires a popup + voice at 6pm. |
-| "How much battery do I have?" | Power tool reports charge / plan / time remaining. |
-| "Close web." (it hears "close WhatsApp") | Permission layer reads the *meaning* and asks "Sir, should I close WhatsApp?" — you answer by voice or click. |
+| You say…                                                              | What happens                                                                                                    |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| "Jarvis, what's Apple?"                                                | Plain answer, spoken back. No tools.                                                                            |
+| "Sleep my PC in 10 seconds."                                           | Orchestrator → terminal tool; in Manual mode it confirms first ("Sir, confirm sleep in 10s?").                 |
+| "List the documents I opened in the last 2 days about the company JD." | Timeline recall → returns the matches → "I found 6, which should I open?"                                     |
+| "Open that one." / "Open the third."                                   | Resource reopener launches the file / URL / switches to the window.                                             |
+| "I was watching*Lantern* on Hotstar — open it."                     | Browser recall searches visit history newest→oldest, finds the Hotstar tab, reopens the URL.                   |
+| "Remind me to call the recruiter at 6pm."                              | Reminders module parses the time, schedules it, and fires a popup + voice at 6pm.                               |
+| "How much battery do I have?"                                          | Power tool reports charge / plan / time remaining.                                                              |
+| "Close web." (it hears "close WhatsApp")                               | Permission layer reads the*meaning* and asks "Sir, should I close WhatsApp?" — you answer by voice or click. |
 
 ---
 
@@ -104,16 +104,16 @@ about your system.
 
 **Things you can ask it**
 
-| You say / type | What it runs / does |
-|----------------|---------------------|
-| "How much free space is on C?" | `Get-Volume C` → reports real free/total |
-| "What's my IP and Wi-Fi network?" | `ipconfig` / `Get-NetConnectionProfile` |
-| "Is Docker installed, and which version?" | probes the command, answers yes/no + version |
-| "Show my top 5 memory-hungry processes." | `Get-Process \| Sort WS -desc \| Select -First 5` |
-| "Open Settings / YouTube / VS Code / Notepad." | `Start-Process "ms-settings:"` / a URL / the app |
-| "Lock the PC." · "Sleep in 10 seconds." · "Shut down." | guarded system actions (ask first — see below) |
-| "Make a folder called Reports on my Desktop." | `New-Item` (confirmed in Partial/Manual) |
-| "Delete temp.txt from Downloads." | `Remove-Item` — **always asks before destructive actions** |
+| You say / type                                           | What it runs / does                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------- |
+| "How much free space is on C?"                           | `Get-Volume C` → reports real free/total                         |
+| "What's my IP and Wi-Fi network?"                        | `ipconfig` / `Get-NetConnectionProfile`                         |
+| "Is Docker installed, and which version?"                | probes the command, answers yes/no + version                        |
+| "Show my top 5 memory-hungry processes."                 | `Get-Process \| Sort WS -desc \| Select -First 5`                   |
+| "Open Settings / YouTube / VS Code / Notepad."           | `Start-Process "ms-settings:"` / a URL / the app                  |
+| "Lock the PC." · "Sleep in 10 seconds." · "Shut down." | guarded system actions (ask first — see below)                     |
+| "Make a folder called Reports on my Desktop."            | `New-Item` (confirmed in Partial/Manual)                          |
+| "Delete temp.txt from Downloads."                        | `Remove-Item` — **always asks before destructive actions** |
 
 **What makes it safe and fast**
 
@@ -140,15 +140,15 @@ or by meaning. Everything stays **on your machine**.
 
 **Things you can ask it**
 
-| You say / type | What it does |
-|----------------|--------------|
-| "What was I doing yesterday afternoon?" | Builds a timeline of that window of time |
-| "Find the documents about the company JD I opened this week." | Keyword + time recall → lists the matches |
-| "Which PDFs did I open in the last 2 days?" | `list_recent_files` filtered by type + time |
-| "That article about capturing system audio — open it." | Semantic recall (by *meaning*) → reopens the page |
-| "I was watching *Lantern* on Hotstar — reopen it." | Browser recall, newest→oldest → opens the URL |
-| "Switch me back to the VS Code window I had open." | Activates the already-running window (no new instance) |
-| "Open the third one." | Reopens that item from the list it just showed you |
+| You say / type                                                | What it does                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| "What was I doing yesterday afternoon?"                       | Builds a timeline of that window of time               |
+| "Find the documents about the company JD I opened this week." | Keyword + time recall → lists the matches             |
+| "Which PDFs did I open in the last 2 days?"                   | `list_recent_files` filtered by type + time          |
+| "That article about capturing system audio — open it."       | Semantic recall (by*meaning*) → reopens the page    |
+| "I was watching*Lantern* on Hotstar — reopen it."          | Browser recall, newest→oldest → opens the URL        |
+| "Switch me back to the VS Code window I had open."            | Activates the already-running window (no new instance) |
+| "Open the third one."                                         | Reopens that item from the list it just showed you     |
 
 **What makes it work**
 
@@ -157,8 +157,8 @@ or by meaning. Everything stays **on your machine**.
   the pages you actively view, all recorded with low overhead.
 - **Two ways to find things** — a unified **FTS5 keyword** index across apps + pages
   + files (with `yesterday`, `last 2 days`, `type:pdf`, `domain:`, `app:` filters),
-  plus optional **semantic search** (local embeddings + FAISS) that matches by
-  meaning when you don't remember the exact words.
+    plus optional **semantic search** (local embeddings + FAISS) that matches by
+    meaning when you don't remember the exact words.
 - **Smart reopen** — URLs open in the browser, files open in their default app, and
   apps **switch to the running window** (falling back to relaunching the exe).
 - **Private by design** — 100% local; pause / private mode, per-app and per-domain
@@ -194,14 +194,14 @@ Rationale and the full port list are in [docs/ANALYSIS.md](docs/ANALYSIS.md).
 You asked whether we need vector DB / SQL / SQLite / Chroma / Redis. The answer
 for a single-machine desktop app:
 
-| Need | Choice | Status |
-|------|--------|--------|
-| Structured data (activity, command memory, reminders, logs, conversations) | **SQLite (WAL)** | Already used (2 DBs today) |
-| Keyword / full-text search | **SQLite FTS5** | Already used (unified index) |
-| Semantic / "by meaning" recall | **FAISS** (local vector index) | Already integrated, lazy-loaded |
-| Config & preferences | **JSON** | Already used |
-| **Redis** | **Not used** | Overkill on one machine — use in-process queues + SQLite |
-| **Chroma** | **Not needed** | FAISS already covers it; can swap later behind one interface |
+| Need                                                                       | Choice                               | Status                                                       |
+| -------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------ |
+| Structured data (activity, command memory, reminders, logs, conversations) | **SQLite (WAL)**               | Already used (2 DBs today)                                   |
+| Keyword / full-text search                                                 | **SQLite FTS5**                | Already used (unified index)                                 |
+| Semantic / "by meaning" recall                                             | **FAISS** (local vector index) | Already integrated, lazy-loaded                              |
+| Config & preferences                                                       | **JSON**                       | Already used                                                 |
+| **Redis**                                                            | **Not used**                   | Overkill on one machine — use in-process queues + SQLite    |
+| **Chroma**                                                           | **Not needed**                 | FAISS already covers it; can swap later behind one interface |
 
 So: **SQLite + FTS5 + FAISS + JSON.** No server database, no Redis.
 
@@ -230,13 +230,13 @@ troubleshooting) are in **[run.md](run.md)**.
 
 ## Current status
 
-| Piece | State |
-|-------|-------|
-| `jarvis_voice_core/` | ✅ Works standalone — floating voice window (Sarvam STT, SAPI TTS, OpenAI chat) |
-| `terminal_access_module/` | ✅ Works standalone — agent + PowerShell + permission engine + fast-path memory + tests |
-| `timeline_monitor_module/` | ✅ Works standalone — capture + recall + search + semantic + Chrome extension |
-| `other tools to check/` | 🔎 Reference only — QML overlay (design ref), old voice (superseded), wx profiles launcher (concept to reuse) |
-| **Unified `jarvis/` app** | ✅ _Phases 0–3 built & verified — tray + orb + 6 tabs + tool-calling orchestrator + Auto/Partial/Manual permissions with voice confirm (`python -m jarvis`)_ |
+| Piece                             | State                                                                                                                                                             |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jarvis_voice_core/`            | ✅ Works standalone — floating voice window (Sarvam STT, SAPI TTS, OpenAI chat)                                                                                  |
+| `terminal_access_module/`       | ✅ Works standalone — agent + PowerShell + permission engine + fast-path memory + tests                                                                          |
+| `timeline_monitor_module/`      | ✅ Works standalone — capture + recall + search + semantic + Chrome extension                                                                                    |
+| `other tools to check/`         | 🔎 Reference only — QML overlay (design ref), old voice (superseded), wx profiles launcher (concept to reuse)                                                    |
+| **Unified `jarvis/` app** | ✅_Phases 0–3 built & verified — tray + orb + 6 tabs + tool-calling orchestrator + Auto/Partial/Manual permissions with voice confirm (`python -m jarvis`)_ |
 
 The originals (`jarvis_voice_core/`, `terminal_access_module/`,
 `timeline_monitor_module/`) are kept intact as the source of truth; the merged
