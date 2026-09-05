@@ -245,6 +245,7 @@ class Runner:
         from jarvis.modules.media.module import MediaModule
         from jarvis.modules.pyscript.module import PyScriptModule
         from jarvis.modules.learning.module import LearningModule
+        from jarvis.modules.system.module import SystemModule
         from jarvis.modules.terminal.providers.openai_provider import OpenAIProvider
         from jarvis.modules.timeline.module import TimelineModule
         from jarvis.ui.confirm_broker import ConfirmBroker
@@ -273,6 +274,7 @@ class Runner:
         self._modules = []
         safe_start(TerminalModule(), "terminal",
                    setup=lambda m: m.attach_engine(self.pw_engine))
+        safe_start(SystemModule(), "system")
         safe_start(TimelineModule(), "timeline")
         self.reminders_module = safe_start(RemindersModule(), "reminders")
         safe_start(PowerModule(), "power")
