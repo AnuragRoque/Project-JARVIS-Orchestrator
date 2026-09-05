@@ -105,17 +105,49 @@ def all_facts() -> dict[str, str]:
 
 
 # --------------------------------------------------------- app-dir discovery
-def resolve_app_dir(name: str, refresh: bool = False) -> dict:
+def _dir_size(path: str, max_files: int = 200_000) -> tuple[int, bool]:
+    """Total bytes under ``path`` (capped so a huge tree can't hang). Returns
+    (bytes, capped)."""
+    total = 0
+    count = 0
+    for dirpath, _dirs, files in os.walk(path):
+        for fn in files:
+            count += 1
+            if count > max_files:
+                return total, True
+            try:
+                total += os.stat(os.path.join(dirpath, fn)).st_size
+            except OSError:
+                continue
+    return total, False
+
+
+def _human_size(n: float) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+def resolve_app_dir(name: str, refresh: bool = False,
+                    with_size: bool = False) -> dict:
     """Find (and cache) directories belonging to an app, by a cheap shallow scan.
 
     Scans %LOCALAPPDATA%, %APPDATA%, %USERPROFILE% ONE level deep for folders
     whose name contains ``name`` — fast and timeout-proof, unlike a deep recurse.
     Results are cached in ``system_facts`` under ``app_dir:<name>``.
+
+    ``with_size=True`` also measures each folder's total size, so a 'how big is
+    X's cache' question is answered in ONE call with no follow-up commands.
     """
     name = (name or "").strip()
     if not name:
         return {"ok": False, "error": "Give an app name to locate."}
     key = f"app_dir:{name.lower()}"
+    dirs: list[str] | None = None
+    cached_hit = False
     if not refresh:
         cached = get_fact(key)
         if cached is not None:
@@ -123,26 +155,41 @@ def resolve_app_dir(name: str, refresh: bool = False) -> dict:
                 dirs = json.loads(cached)
             except (TypeError, ValueError):
                 dirs = [cached] if cached else []
-            return {"ok": True, "app": name, "dirs": dirs, "cached": True}
+            cached_hit = True
 
-    needle = name.lower()
-    roots = [os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
-             os.path.expanduser("~")]
-    found: list[str] = []
-    with _lock:
-        for root in roots:
-            if not root or not os.path.isdir(root):
-                continue
-            try:
-                for entry in os.scandir(root):
-                    if entry.is_dir() and needle in entry.name.lower():
-                        if entry.path not in found:
-                            found.append(entry.path)
-            except OSError:
-                continue
-    set_fact(key, json.dumps(found), source="scan")
-    return {"ok": True, "app": name, "dirs": found, "cached": False,
-            "note": "" if found else f"No folder matching '{name}' in the standard roots."}
+    if dirs is None:
+        needle = name.lower()
+        roots = [os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
+                 os.path.expanduser("~")]
+        dirs = []
+        with _lock:
+            for root in roots:
+                if not root or not os.path.isdir(root):
+                    continue
+                try:
+                    for entry in os.scandir(root):
+                        if entry.is_dir() and needle in entry.name.lower():
+                            if entry.path not in dirs:
+                                dirs.append(entry.path)
+                except OSError:
+                    continue
+        set_fact(key, json.dumps(dirs), source="scan")
+
+    out = {"ok": True, "app": name, "dirs": dirs, "cached": cached_hit}
+    if not dirs:
+        out["note"] = f"No folder matching '{name}' in the standard roots."
+        return out
+    if with_size:
+        sized = []
+        grand = 0
+        for d in dirs:
+            b, capped = _dir_size(d)
+            grand += b
+            sized.append({"path": d, "size": _human_size(b),
+                          "bytes": b, **({"capped": True} if capped else {})})
+        out["folders"] = sized
+        out["total_size"] = _human_size(grand)
+    return out
 
 
 # --------------------------------------------------------- prompt block

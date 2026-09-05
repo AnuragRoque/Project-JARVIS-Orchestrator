@@ -109,12 +109,20 @@ class Bubble(QWidget):
         super().__init__()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.label = QLabel(text)
+        self._role = role
+        self.label = QLabel()
         self.label.setObjectName(f"Bubble_{role}")
         self.label.setWordWrap(True)
         self.label.setMaximumWidth(max_width)
         self.label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.label.setOpenExternalLinks(True)
+        # Render the assistant's replies as Markdown so **bold**, lists, and code
+        # show formatted instead of raw. User/system text stays as-is (system
+        # bubbles carry small inline HTML like the error icon).
+        if role == "assistant":
+            self.label.setTextFormat(Qt.TextFormat.MarkdownText)
+        self.set_text(text)
         if role == "user":
             lay.addStretch()
             lay.addWidget(self.label)

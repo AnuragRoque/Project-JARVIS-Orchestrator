@@ -18,18 +18,21 @@ LOCATE_APP_DIR_SPEC = {
     "function": {
         "name": "locate_app_dir",
         "description": (
-            "Find where an app stores its data/cache on this PC and remember it. "
-            "Use for 'where is Claude's cache', 'find Chrome's user data folder', "
-            "'how big is <app>'s cache' (locate first, then size the returned path). "
-            "Does a fast shallow scan of %LOCALAPPDATA%, %APPDATA% and the home "
-            "folder; the result is cached, so ask once and it's known thereafter. "
-            "Never invent a path — call this instead."
+            "Find where an app stores its data/cache on this PC, and (optionally) "
+            "how big those folders are — in ONE call. Use for 'where is Claude's "
+            "cache', 'how big is <app>'s cache'. Call it ONCE with the base app name "
+            "(e.g. 'antigravity', NOT 'antigravity-updater' too) — it already matches "
+            "every related folder. For a size question pass with_size=true and you "
+            "will NOT need any follow-up PowerShell. Result is cached; ask once and "
+            "it's known thereafter. Never invent a path — call this instead."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "name": {"type": "string",
-                         "description": "App name to locate, e.g. 'claude', 'chrome'."},
+                         "description": "Base app name to locate, e.g. 'claude', 'chrome'."},
+                "with_size": {"type": "boolean",
+                              "description": "Also measure each folder's total size (one call, no extra commands)."},
                 "refresh": {"type": "boolean",
                             "description": "Re-scan instead of using the cached result."},
             },
@@ -71,8 +74,10 @@ class SystemModule(Module):
     def get_system_info(self) -> dict:
         return env_snapshot()
 
-    def locate_app_dir(self, name: str = "", refresh: bool = False) -> dict:
-        return resolve_app_dir(name, refresh=bool(refresh))
+    def locate_app_dir(self, name: str = "", refresh: bool = False,
+                       with_size: bool = False) -> dict:
+        return resolve_app_dir(name, refresh=bool(refresh),
+                               with_size=bool(with_size))
 
 
 def get_module() -> Module:
