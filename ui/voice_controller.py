@@ -223,6 +223,15 @@ class VoiceController(QObject):
 
     def _build_messages(self, prompt: str) -> list[dict]:
         msgs = [{"role": "system", "content": self._system_prompt}]
+        # Live system facts (username, home, %TEMP%, discovered app folders) so
+        # JARVIS never guesses a path or emits a <YourUsername> placeholder.
+        try:
+            from jarvis.app.sysfacts import prompt_block
+            facts = prompt_block()
+            if facts:
+                msgs.append({"role": "system", "content": facts})
+        except Exception:
+            log.debug("system facts block unavailable", exc_info=True)
         msgs.extend(self.history)
         # Inject learned memory: the approach that worked before / one to avoid now.
         if self._learner is not None:
